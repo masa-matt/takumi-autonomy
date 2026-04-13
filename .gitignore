@@ -1,6 +1,7 @@
 # Runtime job artifacts (keep .gitkeep, ignore contents)
 runtime/workspaces/jobs/*/
 runtime/reports/*.json
+runtime/approvals/*.json
 runtime/logs/*.log
 runtime/tmp/
 

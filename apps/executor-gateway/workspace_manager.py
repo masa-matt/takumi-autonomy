@@ -23,10 +23,11 @@ def create_workspace(job_id: str) -> str:
     return str(workspace_path)
 
 
-def save_report(job, result) -> str:
+def save_report(job, result, stop_reason: str = None) -> str:
     """Persist job report to both workspace and runtime/reports/.
 
-    Saves even when result is None (e.g. unexpected exception before executor ran).
+    Saves even when result is None (e.g. approval denied before workspace creation).
+    stop_reason is set when the job stopped due to retry exhaustion or policy denial.
     Returns the path of the runtime/reports/{job_id}.json file.
     """
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -35,6 +36,7 @@ def save_report(job, result) -> str:
         "job_id": job.job_id,
         "task": job.task.description,
         "status": job.status.value,
+        "stop_reason": stop_reason,
         "workspace_path": job.workspace_path,
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
