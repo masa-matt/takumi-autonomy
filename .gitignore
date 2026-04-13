@@ -1,0 +1,20 @@
+# Runtime job artifacts (keep .gitkeep, ignore contents)
+runtime/workspaces/jobs/*/
+runtime/reports/*.json
+runtime/logs/*.log
+runtime/tmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store

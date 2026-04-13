@@ -29,12 +29,12 @@ Task 投入から Report 保存までの最小縦断を通す。
 
 ### 通過条件チェックリスト
 
-- [ ] task を投入できる (`scripts/run_local.py` または Discord)
-- [ ] job id が発行される
-- [ ] 1 job 1 workspace が作成される (`runtime/workspaces/jobs/{job_id}/`)
-- [ ] executor が 1 回実行される (Agent SDK または stub)
-- [ ] report が保存される (`runtime/reports/{job_id}.json`)
-- [ ] 失敗時も記録が残る
+- [x] task を投入できる (`scripts/run_local.py`)
+- [x] job id が発行される
+- [x] 1 job 1 workspace が作成される (`runtime/workspaces/jobs/{job_id}/`)
+- [x] executor が 1 回実行される (stub mode で検証済み / API キー設定で実 API)
+- [x] report が保存される (`runtime/reports/{job_id}.json`)
+- [x] 失敗時も記録が残る (import エラー時も report 保存確認)
 
 ### 実装対象ファイル
 
