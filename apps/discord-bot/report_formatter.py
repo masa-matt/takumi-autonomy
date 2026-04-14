@@ -37,7 +37,7 @@ def build_embed(report_path: str) -> discord.Embed:
         r = json.load(f)
 
     status = r.get("status", "unknown")
-    color, icon = _STATUS_META.get(status, (discord.Color.grayed(), "❓"))
+    color, icon = _STATUS_META.get(status, (discord.Color.light_grey(), "❓"))
 
     job_id   = r.get("job_id", "?")
     task_txt = _trunc(r.get("task", ""), 100)
