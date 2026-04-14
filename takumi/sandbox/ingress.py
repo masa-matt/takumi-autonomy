@@ -4,11 +4,15 @@ copy-in / repo clone を担当する。
 ホスト上の元ファイルや元 repo を直接操作せず、sandbox の input/ / repos/ にコピー・clone する。
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 from takumi.sandbox.workspace import Workspace
+
+# inbox のデフォルトパス（Docker: /app/inbox, ローカル直接実行: ./inbox）
+INBOX_DIR = Path(os.environ.get("INBOX_DIR", "/app/inbox"))
 
 
 # ── ファイル取り込み ──────────────────────────────────────────────────────────
@@ -63,6 +67,40 @@ def copy_directory(ws: Workspace, src: Path, dest_name: str | None = None) -> Pa
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
     return dest
+
+
+# ── Inbox 取り込み ────────────────────────────────────────────────────────────
+
+def list_inbox() -> list[Path]:
+    """inbox にあるファイルの一覧を返す。ディレクトリは除外。"""
+    if not INBOX_DIR.exists():
+        return []
+    return sorted(p for p in INBOX_DIR.iterdir() if p.is_file() and p.name != ".gitkeep")
+
+
+def copy_from_inbox(ws: Workspace, filename: str) -> Path:
+    """inbox のファイルを sandbox の input/ にコピーする。
+
+    Args:
+        ws:       対象 workspace
+        filename: inbox 内のファイル名（パス区切り・'..' は拒否）
+
+    Returns:
+        コピー先のパス（ws.input / filename）
+
+    Raises:
+        ValueError: filename にパストラバーサルが含まれる場合
+        FileNotFoundError: inbox に filename が存在しない場合
+    """
+    # パストラバーサル防止
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise ValueError(f"copy_from_inbox: invalid filename: {filename!r}")
+
+    src = INBOX_DIR / filename
+    if not src.exists():
+        raise FileNotFoundError(f"copy_from_inbox: not found in inbox: {filename}")
+
+    return copy_file(ws, src, dest_name=filename)
 
 
 # ── Repo clone ────────────────────────────────────────────────────────────────

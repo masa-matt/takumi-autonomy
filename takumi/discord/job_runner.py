@@ -7,11 +7,16 @@ Executor は ANTHROPIC_API_KEY があれば Anthropic API を使い、
 なければスタブとして応答する（sandbox 基盤の検証用）。
 """
 
+import logging
 import os
 import re
 from typing import Callable
 
 from takumi.core.job_state import Job, JobStatus, create_job
+from takumi.sandbox.ingress import copy_from_inbox
+from takumi.sandbox.workspace import get_workspace
+
+log = logging.getLogger("takumi-v2")
 
 # ── 危険度判定（インライン / V1 danger_classifier.py の最小移植）────────────────
 
@@ -77,12 +82,14 @@ def _execute(job: Job) -> str:
 def run_job(
     task: str,
     on_status: Callable[[Job], None] | None = None,
+    inbox_files: list[str] | None = None,
 ) -> Job:
     """タスクを受け取り、job を作成して実行し、完了した Job を返す。
 
     Args:
-        task:      ユーザーからのタスク文字列
-        on_status: 状態変化のたびに呼ばれるコールバック（Discord 中間報告用）
+        task:         ユーザーからのタスク文字列
+        on_status:    状態変化のたびに呼ばれるコールバック（Discord 中間報告用）
+        inbox_files:  inbox から input/ にコピーするファイル名のリスト
 
     Returns:
         完了（done / failed）した Job
@@ -94,6 +101,17 @@ def run_job(
     """
     job = create_job(task)
     _notify(job, on_status)
+
+    # inbox → input/ への copy-in（workspace 作成直後、実行前）
+    if inbox_files:
+        ws = get_workspace(job.job_id)
+        if ws:
+            for fname in inbox_files:
+                try:
+                    copy_from_inbox(ws, fname)
+                    log.info("inbox copy-in: %s → %s/input/", fname, job.job_id)
+                except Exception as exc:
+                    log.warning("inbox copy-in failed for %s: %s", fname, exc)
 
     danger = _classify(task)
 

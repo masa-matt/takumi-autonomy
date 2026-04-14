@@ -27,6 +27,7 @@ from discord.ext import commands
 
 from takumi.core.job_state import Job, JobStatus
 from takumi.discord.job_runner import run_job, resume_job
+from takumi.sandbox.ingress import list_inbox, copy_from_inbox, INBOX_DIR
 
 # ── ロギング ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -49,6 +50,10 @@ _thread_pool = ThreadPoolExecutor(max_workers=4)
 # BLOCKED ジョブを Discord メッセージと紐づけておく辞書
 # {job_id: asyncio.Future}  — Future が resolve されると承認/却下が伝わる
 _pending_approvals: dict[str, asyncio.Future] = {}
+
+# チャンネルごとの pending inbox files
+# {channel_id: [filename, ...]}  — 次の !task / @Takumi で input/ にコピーされる
+_pending_inbox_files: dict[int, list[str]] = {}
 
 
 # ── Embed ヘルパー ─────────────────────────────────────────────────────────────
@@ -161,9 +166,12 @@ async def _process_task(message: discord.Message, description: str) -> None:
             ).result(timeout=10)
 
     # 1. run_job を thread pool で実行（BLOCKED なら途中で返る）
+    channel_id = message.channel.id
+    pending_files = _pending_inbox_files.pop(channel_id, [])
+
     job: Job = await loop.run_in_executor(
         _thread_pool,
-        lambda: run_job(description, on_status=on_status),
+        lambda: run_job(description, on_status=on_status, inbox_files=pending_files or None),
     )
 
     # 2. BLOCKED の場合: ボタン応答を待って resume
@@ -252,6 +260,52 @@ async def cmd_status(ctx, job_id: str):
 @bot.command(name="ping", help="死活確認")
 async def cmd_ping(ctx):
     await ctx.send(f"🏓 Pong! latency={bot.latency * 1000:.0f}ms  (Takumi V2)")
+
+
+@bot.command(name="files", help="inbox ファイル一覧 / 次のタスクに添付")
+async def cmd_files(ctx, filename: str | None = None):
+    """inbox のファイルを確認・予約する。
+
+    !files          — inbox の一覧を表示
+    !files data.csv — data.csv を次の @Takumi タスクの input/ にコピー予約
+    """
+    if filename is None:
+        # 一覧表示
+        files = list_inbox()
+        if not files:
+            await ctx.send(
+                f"📭 inbox は空です。\n"
+                f"`{INBOX_DIR}` にファイルを置いてください。"
+            )
+        else:
+            names = "\n".join(f"  • `{f.name}`" for f in files)
+            await ctx.send(f"📂 **inbox** ({len(files)} files)\n{names}")
+        return
+
+    # ファイルを予約（次の !task / @Takumi で input/ にコピーされる）
+    # パストラバーサルチェックは copy_from_inbox 内で行う
+    if "/" in filename or "\\" in filename or ".." in filename:
+        await ctx.send(f"⚠️ 無効なファイル名: `{filename}`")
+        return
+
+    src = INBOX_DIR / filename
+    if not src.exists():
+        await ctx.send(f"❓ inbox に `{filename}` が見つかりません。")
+        return
+
+    channel_id = ctx.channel.id
+    if channel_id not in _pending_inbox_files:
+        _pending_inbox_files[channel_id] = []
+    if filename not in _pending_inbox_files[channel_id]:
+        _pending_inbox_files[channel_id].append(filename)
+
+    queued = _pending_inbox_files[channel_id]
+    names = ", ".join(f"`{f}`" for f in queued)
+    await ctx.send(
+        f"📎 `{filename}` を予約しました。\n"
+        f"予約中: {names}\n"
+        f"次の `@Takumi <タスク>` で input/ にコピーされます。"
+    )
 
 
 # ── エントリポイント ───────────────────────────────────────────────────────────

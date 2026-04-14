@@ -9,8 +9,10 @@ services:
       - .env
 
     # runtime/ をホストにマウント — 再起動してもメモリ・レポートが残る
+    # inbox/ をホストにマウント — ユーザーがファイルを置く場所（read-only）
     volumes:
       - ./runtime:/app/runtime
+      - ./inbox:/app/inbox:ro
 
     # ログをローテーションする
     logging:
