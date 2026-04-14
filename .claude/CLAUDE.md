@@ -50,6 +50,43 @@
    - 何が残っているか
    - 次に取るべき推奨アクション
 
+## Recall Rules (CP-03)
+タスク実行前に必ず `session_search` を呼ぶこと。
+
+- `apps/hermes-bridge/session_search_api.py` — 過去メモリエントリの検索
+- `apps/hermes-bridge/skill_api.py` — 承認済み skill の検索
+- 検索結果は report の `recall` フィールドに記録される
+
+## Save Rules (CP-03)
+タスク完了後に `memory_write` を呼ぶこと。save/no-save ルールは `memory_api.py` に定義。
+
+- **保存する**: status=done または情報価値のある失敗
+- **保存しない**: policy DENY / 機密情報を含む出力 / result なし
+- `apps/hermes-bridge/memory_api.py` — save/no-save 判定
+
+## Skill Rules (CP-04)
+成功したタスクは skill 化を検討すること。詳細は `docs/skill-policy.md` を参照。
+
+- `apps/hermes-bridge/skill_api.py` — skill_create / approve / search
+- `runtime/memory/skills/` — skill 保存先
+- `--skill` フラグで draft 作成、`--skill-review` で承認
+
+## Safety Rules (CP-02)
+承認エンジンは Takumi Core 側で判定する。Claude 側で勝手に危険操作を実行しない。
+
+- `apps/takumi-core/policy/danger_classifier.py` — 危険度分類
+- `apps/takumi-core/policy/approval_policy.py` — Auto Allow / Approval Required / Deny
+- DENY された操作は workspace も作らずに停止し、report に stop_reason を記録する
+
+## Hooks (CP-05)
+Claude Code Team 移行後は `.claude/hooks/` のスクリプトが自動実行される。
+
+- `pre_tool_use.sh` — ツール実行前の audit logging
+- `post_tool_use.sh` — ツール実行後の audit logging
+- `session_stop.sh` — セッション終了時の handoff reminder
+
+設定: `.claude/settings.json`
+
 ## Source-of-truth files
 存在する場合、まず次の順で読むこと。
 
@@ -90,7 +127,7 @@
 このPoCでは、次を優先すること。
 
 - モジュール化された構成
-- executor を差し替え可能な設計
+- executor を差し替え可能な設計 (`apps/executor-gateway/base.py` の Executor interface)
 - Takumi Core における明示的な state 管理
 - 長期記憶の正本としての Hermes
 - 隔離された workspace

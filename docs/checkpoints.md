@@ -125,23 +125,24 @@ Task 投入から report 保存までの最小縦断を通す。
 
 ---
 
-## CP-05 Claude Code 移行準備
+## CP-05 Claude Code 移行準備 ✅
 
 ### 目的
 Claude Code へ executor を差し替えやすくする。
 
 ### 通過条件
-- [ ] Claude 固有ルールが `.claude/` に集約されている
-- [ ] Recall First / Save / Safety が `CLAUDE.md` に反映されている
-- [ ] hooks 導線がある
-- [ ] Executor interface を変えずに差し替え可能
+- [x] Claude 固有ルールが `.claude/` に集約されている
+- [x] Recall First / Save / Safety が `CLAUDE.md` に反映されている
+- [x] hooks 導線がある
+- [x] Executor interface を変えずに差し替え可能
 
 ### 成果物
-- `claude_code_executor.py`
-- `.claude/CLAUDE.md`
-- `.claude/settings.json`
-- `.claude/hooks/`
-- `docs/migration-to-claude-code-team.md`
+- `apps/executor-gateway/claude_code_executor.py` ✅
+- `.claude/CLAUDE.md` ✅ (Recall/Save/Skill/Safety/Hooks sections)
+- `.claude/settings.json` ✅ (PreToolUse/PostToolUse/Stop hooks)
+- `.claude/hooks/` ✅ (pre_tool_use.sh, post_tool_use.sh, session_stop.sh)
+- `docs/migration-to-claude-code-team.md` ✅
+- `scripts/run_local.py` ✅ (--executor flag: agent-sdk / claude-code)
 
 ### Git tag
-- `cp-05-claude-code-ready`
+- `cp-05-claude-code-ready` ✅

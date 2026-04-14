@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Local CLI harness for CP-01 through CP-04 verification.
+"""Local CLI harness for CP-01 through CP-05 verification.
 
 Usage:
     python scripts/run_local.py --task "description"
     python scripts/run_local.py --task "description" --skill        # create skill draft after run
     python scripts/run_local.py --task "description" --auto-approve
     python scripts/run_local.py --task "description" --max-retries 2
+    python scripts/run_local.py --task "description" --executor claude-code  # use Claude Code CLI
     python scripts/run_local.py --skill-review                      # review pending skill drafts
     python scripts/run_local.py --metrics                           # show MOR/PRR/PCR
 
-Set ANTHROPIC_API_KEY to use the real Anthropic API; omit for stub mode.
+Executor options:
+    --executor agent-sdk    (default) Anthropic API direct — requires ANTHROPIC_API_KEY
+    --executor claude-code  Claude Code CLI — requires `claude` binary and auth
 """
 
 import argparse
@@ -34,15 +37,28 @@ from mor_prr import get_metrics           # noqa: E402
 from skill_api import list_skills, approve_skill, reject_skill  # noqa: E402
 
 
+def _build_executor(executor_name: str):
+    """Return an Executor instance for the given name."""
+    if executor_name == "claude-code":
+        from claude_code_executor import ClaudeCodeExecutor
+        return ClaudeCodeExecutor()
+    # Default: agent-sdk
+    from agent_sdk_executor import AgentSdkExecutor
+    return AgentSdkExecutor()
+
+
 def cmd_run(args) -> int:
+    executor_label = args.executor or "agent-sdk"
     print("=== Takumi Autonomy — run_local ===")
     print(f"Task:         {args.task}")
+    print(f"Executor:     {executor_label}")
     print(f"Auto-approve: {args.auto_approve}")
     print(f"Max retries:  {args.max_retries}")
     print(f"Create skill: {args.skill}")
     print()
 
     runner = JobRunner(
+        executor=_build_executor(executor_label),
         auto_approve=args.auto_approve,
         max_retries=args.max_retries,
         create_skill=args.skill,
@@ -112,6 +128,12 @@ def main() -> None:
         description="Takumi Autonomy — Local Job Runner (CP-01 through CP-04)"
     )
     parser.add_argument("--task", help="Task description to execute")
+    parser.add_argument(
+        "--executor",
+        choices=["agent-sdk", "claude-code"],
+        default="agent-sdk",
+        help="Executor backend: agent-sdk (default) or claude-code",
+    )
     parser.add_argument("--auto-approve", action="store_true", default=False,
                         help="Auto-approve APPROVAL_REQUIRED tasks")
     parser.add_argument("--max-retries", type=int, default=3, metavar="N",
