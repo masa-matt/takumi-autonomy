@@ -1,9 +1,10 @@
-"""MOR / PRR metrics tracker.
+"""MOR / PRR / PCR metrics tracker.
 
 Persists running counters to runtime/memory/metrics.json.
 
-MOR (Memory Operation Rate)  = memory_write_saves / total_jobs
-PRR (Past Reference Rate)    = session_search_calls / total_jobs
+MOR (Memory Operation Rate)    = memory_write_saves / total_jobs
+PRR (Past Reference Rate)      = session_search_calls / total_jobs
+PCR (Proceduralization Rate)   = skill_creates / total_jobs
 """
 
 import json
@@ -18,12 +19,19 @@ _DEFAULTS: dict = {
     "memory_write_calls": 0,
     "memory_write_saves": 0,
     "memory_write_skips": 0,
+    "skill_creates": 0,
+    "skill_approvals": 0,
+    "skill_references": 0,
 }
 
 
 def _load() -> dict:
     if _METRICS_FILE.exists():
-        return json.loads(_METRICS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_METRICS_FILE.read_text(encoding="utf-8"))
+        # Back-fill any keys added after initial creation
+        for k, v in _DEFAULTS.items():
+            data.setdefault(k, v)
+        return data
     return dict(_DEFAULTS)
 
 
@@ -56,6 +64,26 @@ def record_write(saved: bool) -> None:
     _persist(m)
 
 
+def record_skill_create(created: bool) -> None:
+    if not created:
+        return
+    m = _load()
+    m["skill_creates"] += 1
+    _persist(m)
+
+
+def record_skill_approve() -> None:
+    m = _load()
+    m["skill_approvals"] += 1
+    _persist(m)
+
+
+def record_skill_reference() -> None:
+    m = _load()
+    m["skill_references"] += 1
+    _persist(m)
+
+
 def get_metrics() -> dict:
     m = _load()
     total = m["total_jobs"] or 1  # avoid div-by-zero on first run
@@ -63,4 +91,5 @@ def get_metrics() -> dict:
         **m,
         "MOR": round(m["memory_write_saves"] / total, 3),
         "PRR": round(m["session_search_calls"] / total, 3),
+        "PCR": round(m["skill_creates"] / total, 3),
     }

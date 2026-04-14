@@ -21,3 +21,4 @@ venv/
 .DS_Store
 runtime/memory/entries/*.json
 runtime/memory/metrics.json
+runtime/memory/skills/*.json

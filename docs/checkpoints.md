@@ -101,26 +101,27 @@ Task 投入から report 保存までの最小縦断を通す。
 
 ---
 
-## CP-04 手続き化
+## CP-04 手続き化 ✅
 
 ### 目的
 成功パターンを skill 化して再利用する。
 
 ### 通過条件
-- [ ] task 完了後に skill draft を作れる
-- [ ] skill review の簡易フローがある
-- [ ] skill を保存できる
-- [ ] 次回 task でその skill を参照できる
-- [ ] PCR を計測できる
+- [x] task 完了後に skill draft を作れる
+- [x] skill review の簡易フローがある
+- [x] skill を保存できる
+- [x] 次回 task でその skill を参照できる
+- [x] PCR を計測できる
 
 ### 成果物
-- `skill_api.py`
-- `docs/skill-policy.md`
-- `packages/skills/templates/`
-- 1 本以上の skill 実例
+- `apps/hermes-bridge/skill_api.py` ✅
+- `docs/skill-policy.md` ✅
+- `packages/skills/templates/skill-template.md` ✅
+- `packages/schemas/skill.py` ✅
+- `runtime/memory/skills/` ✅ (skill-20260414-... 実例あり)
 
 ### Git tag
-- `cp-04-proceduralization`
+- `cp-04-proceduralization` ✅
 
 ---
 

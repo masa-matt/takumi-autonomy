@@ -23,7 +23,7 @@ def create_workspace(job_id: str) -> str:
     return str(workspace_path)
 
 
-def save_report(job, result, stop_reason: str = None, recall: dict = None, save: dict = None) -> str:
+def save_report(job, result, stop_reason: str = None, recall: dict = None, save: dict = None, skill: dict = None) -> str:
     """Persist job report to both workspace and runtime/reports/.
 
     Saves even when result is None (e.g. approval denied before workspace creation).
@@ -43,6 +43,7 @@ def save_report(job, result, stop_reason: str = None, recall: dict = None, save:
         "error": job.error,
         "recall": recall,
         "save": save,
+        "skill": skill,
         "result": result.to_dict() if result is not None else None,
     }
 
