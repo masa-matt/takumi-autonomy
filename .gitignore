@@ -1,5 +1,8 @@
 # Runtime job artifacts (keep .gitkeep, ignore contents)
 runtime/workspaces/jobs/*/
+
+# V2 job sandboxes (runtime, not committed)
+takumi/jobs/*/
 runtime/reports/*.json
 runtime/approvals/*.json
 runtime/logs/*.log
