@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """gateway.py — Takumi Autonomy Discord Bot
 
-コマンド一覧:
-  !task <内容>    タスクを投入して結果を返す
-  !metrics        MOR / PRR / PCR を表示
-  !ping           死活確認
+使い方:
+  @Takumi <タスクの内容>   メンションでタスクを投入（推奨）
+  !task <内容>             プレフィックスでも可
+  !metrics                 MOR / PRR / PCR を表示
+  !ping                    死活確認
 
 環境変数 (`.env` で設定):
   DISCORD_TOKEN       必須。Bot トークン
@@ -12,7 +13,6 @@
 """
 
 import asyncio
-import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -32,11 +32,14 @@ log = logging.getLogger("takumi-bot")
 
 # ── Bot 設定 ──────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
-intents.message_content = True          # メッセージ本文を読む
+intents.message_content = True  # Privileged Intent: Developer Portal で要有効化
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# メンション (@bot ...) でも ! プレフィックスでも反応する
+bot = commands.Bot(
+    command_prefix=commands.when_mentioned_or("!"),
+    intents=intents,
+)
 
-# JobRunner はプロセス単位でシングルトン（スレッドセーフな使い方のみ）
 _EXECUTOR_NAME = os.environ.get("TAKUMI_EXECUTOR", "agent-sdk")
 _runner = None
 _thread_pool = ThreadPoolExecutor(max_workers=4)
@@ -49,6 +52,36 @@ def get_runner():
     return _runner
 
 
+# ── 共通タスク実行ロジック ─────────────────────────────────────────────────────
+async def _run_task(channel, description: str, reply_to=None):
+    """description を JobRunner に投げて結果を channel に送る。
+
+    reply_to: discord.Message — 返信先。None なら通常送信。
+    """
+    log.info("Task received: %r", description[:80])
+
+    # 「処理中」メッセージを先に送る
+    processing_text = f"⏳ **Processing…**\n> {description[:120]}"
+    if reply_to:
+        processing_msg = await reply_to.reply(processing_text)
+    else:
+        processing_msg = await channel.send(processing_text)
+
+    loop = asyncio.get_event_loop()
+    try:
+        job, report_path = await loop.run_in_executor(
+            _thread_pool,
+            lambda: get_runner().run(description),
+        )
+        embed = build_embed(report_path)
+        log.info("Task done: job=%s status=%s", job.job_id, job.status.value)
+    except Exception as exc:
+        log.exception("JobRunner error for task: %s", description)
+        embed = build_error_embed(description, str(exc))
+
+    await processing_msg.edit(content=None, embed=embed)
+
+
 # ── イベント ──────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
@@ -57,11 +90,49 @@ async def on_ready():
 
 
 @bot.event
+async def on_message(message: discord.Message):
+    """メンション (@bot <内容>) をタスクとして処理する。
+
+    !コマンドは process_commands に委譲する。
+    """
+    # 自分自身や他の Bot は無視
+    if message.author.bot:
+        return
+
+    # Bot がメンションされているか確認
+    if bot.user in message.mentions:
+        # メンション部分を除去してタスク本文を取り出す
+        content = message.content
+        for mention in (f"<@{bot.user.id}>", f"<@!{bot.user.id}>"):
+            content = content.replace(mention, "")
+        description = content.strip()
+
+        if not description:
+            await message.reply(
+                "タスクの内容を書いてください。\n例: `@Takumi ワークスペースのファイル一覧を教えて`"
+            )
+            return
+
+        # !task などのプレフィックスコマンドと重複処理しないようにスキップ
+        ctx = await bot.get_context(message)
+        if ctx.valid:
+            # 既知のコマンドとして解釈できる場合は process_commands に任せる
+            await bot.process_commands(message)
+            return
+
+        await _run_task(message.channel, description, reply_to=message)
+        return
+
+    # メンションなし → 通常のコマンド処理
+    await bot.process_commands(message)
+
+
+@bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"⚠️ 引数が足りません。`!task <タスクの内容>` のように使ってください。")
+        await ctx.send("⚠️ タスクの内容を書いてください。\n例: `!task ワークスペースのファイル一覧を教えて`")
     elif isinstance(error, commands.CommandNotFound):
-        pass  # 他 bot のコマンドを無視
+        pass  # 他 bot のコマンドは無視
     else:
         log.error("Command error: %s", error)
         await ctx.send(f"⚠️ エラーが発生しました: {error}")
@@ -70,41 +141,23 @@ async def on_command_error(ctx, error):
 # ── コマンド ──────────────────────────────────────────────────────────────────
 @bot.command(name="task", help="タスクを投入して結果を返す")
 async def cmd_task(ctx, *, description: str):
-    """!task <description> — JobRunner にタスクを投入する。"""
-    # 即座に「処理中」メッセージを送る
-    processing_msg = await ctx.send(
-        f"⏳ **Processing…**\n> {description[:120]}"
-    )
-
-    loop = asyncio.get_event_loop()
-    try:
-        # JobRunner は同期処理なので ThreadPoolExecutor 経由で実行
-        job, report_path = await loop.run_in_executor(
-            _thread_pool,
-            lambda: get_runner().run(description),
-        )
-        embed = build_embed(report_path)
-
-    except Exception as exc:
-        log.exception("JobRunner error for task: %s", description)
-        embed = build_error_embed(description, str(exc))
-
-    await processing_msg.edit(content=None, embed=embed)
+    """!task <description>"""
+    await _run_task(ctx.channel, description, reply_to=ctx.message)
 
 
 @bot.command(name="metrics", help="MOR / PRR / PCR を表示")
 async def cmd_metrics(ctx):
-    """!metrics — 累積メトリクスを表示する。"""
+    """!metrics"""
     try:
         m = metrics_summary()
         lines = [
             "**Takumi Metrics**",
-            f"```",
+            "```",
             f"Total jobs    : {m.get('total_jobs', 0)}",
             f"MOR (memory)  : {m.get('MOR', 0):.1%}",
             f"PRR (recall)  : {m.get('PRR', 0):.1%}",
             f"PCR (skill)   : {m.get('PCR', 0):.1%}",
-            f"```",
+            "```",
         ]
         await ctx.send("\n".join(lines))
     except Exception as exc:
