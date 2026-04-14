@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """takumi.discord.gateway — Takumi Local Autonomy V2 Discord Bot
 
-V2 の改善点（V1 との違い）:
-  - Job 状態を 5 状態で管理（queued / running / blocked / done / failed）
-  - 中間報告（状態変化ごとにメッセージを編集）
-  - BLOCKED 時に承認ボタンを表示し、ユーザーが判断する
-
 コマンド:
-  @Takumi <タスク>   タスクを投入（推奨）
-  !task <タスク>     プレフィックスでも可
-  !status <job-id>  job の現在状態を確認
-  !ping              死活確認
+  /task <description>   タスクを投入（スラッシュコマンド、推奨）
+  /status <job_id>      job の現在状態を確認
+  /ping                 死活確認
+  /files [filename]     inbox 一覧 / 次のタスクにファイルを添付
+  @Takumi <タスク>      メンションでもタスク投入可
 
 環境変数:
   DISCORD_TOKEN     必須
-  ANTHROPIC_API_KEY 任意（未設定ならスタブモード）
+  ANTHROPIC_API_KEY 任意（TAKUMI_EXECUTOR=api 時に必要）
+  TAKUMI_EXECUTOR   api（デフォルト）/ claude-code
 """
 
 import asyncio
@@ -23,6 +20,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from takumi.core.job_state import Job, JobStatus
@@ -52,7 +50,7 @@ _thread_pool = ThreadPoolExecutor(max_workers=4)
 _pending_approvals: dict[str, asyncio.Future] = {}
 
 # チャンネルごとの pending inbox files
-# {channel_id: [filename, ...]}  — 次の !task / @Takumi で input/ にコピーされる
+# {channel_id: [filename, ...]}  — 次のタスクで input/ にコピーされる
 _pending_inbox_files: dict[int, list[str]] = {}
 
 
@@ -135,38 +133,34 @@ class ApprovalView(discord.ui.View):
 
 # ── コアタスク処理 ─────────────────────────────────────────────────────────────
 
-async def _process_task(message: discord.Message, description: str) -> None:
-    """Discord メッセージからタスクを受け取り、job を作成・実行して報告する。"""
+async def _run_job(
+    status_msg: discord.Message,
+    channel_id: int,
+    description: str,
+) -> None:
+    """タスクを実行して Discord メッセージを更新する（共通処理）。
+
+    メッセージ送信後の処理をまとめたヘルパー。
+    _process_task（mention）と _process_task_interaction（slash）の両方から呼ばれる。
+    """
     loop = asyncio.get_event_loop()
 
-    # 即時 queued メッセージを送信
-    status_msg = await message.reply(f"📥 **Queued…**\n> {description[:120]}")
-    current_embed: discord.Embed | None = None
-    approval_view: ApprovalView | None = None
-
-    # 状態変化コールバック（同期スレッドから呼ばれる）
     def on_status(job: Job) -> None:
-        nonlocal current_embed, approval_view
-        current_embed = _build_embed(job)
-
+        embed = _build_embed(job)
         if job.status == JobStatus.BLOCKED:
             future = loop.create_future()
             _pending_approvals[job.job_id] = future
             view = ApprovalView(job.job_id, future)
-            approval_view = view
-            # スレッドから安全に Discord メッセージを編集
             asyncio.run_coroutine_threadsafe(
-                status_msg.edit(content=None, embed=current_embed, view=view),
+                status_msg.edit(content=None, embed=embed, view=view),
                 loop,
             ).result(timeout=10)
         else:
             asyncio.run_coroutine_threadsafe(
-                status_msg.edit(content=None, embed=current_embed, view=None),
+                status_msg.edit(content=None, embed=embed, view=None),
                 loop,
             ).result(timeout=10)
 
-    # 1. run_job を thread pool で実行（BLOCKED なら途中で返る）
-    channel_id = message.channel.id
     pending_files = _pending_inbox_files.pop(channel_id, [])
 
     job: Job = await loop.run_in_executor(
@@ -174,20 +168,16 @@ async def _process_task(message: discord.Message, description: str) -> None:
         lambda: run_job(description, on_status=on_status, inbox_files=pending_files or None),
     )
 
-    # 2. BLOCKED の場合: ボタン応答を待って resume
     if job.status == JobStatus.BLOCKED:
         future = _pending_approvals.get(job.job_id)
         if future:
             try:
-                approved = await asyncio.wait_for(
-                    asyncio.shield(future), timeout=300
-                )
+                approved = await asyncio.wait_for(asyncio.shield(future), timeout=300)
             except asyncio.TimeoutError:
                 approved = False
             finally:
                 _pending_approvals.pop(job.job_id, None)
 
-            # resume を thread pool で実行
             job = await loop.run_in_executor(
                 _thread_pool,
                 lambda: resume_job(job, approved=approved, on_status=on_status),
@@ -196,11 +186,60 @@ async def _process_task(message: discord.Message, description: str) -> None:
     log.info("Job %s finished: status=%s", job.job_id, job.status.value)
 
 
-# ── イベント / コマンド ────────────────────────────────────────────────────────
+async def _process_task(message: discord.Message, description: str) -> None:
+    """メンション経由のタスク処理。"""
+    status_msg = await message.reply(f"📥 **Queued…**\n> {description[:120]}")
+    await _run_job(status_msg, message.channel.id, description)
+
+
+async def _process_task_interaction(interaction: discord.Interaction, description: str) -> None:
+    """スラッシュコマンド経由のタスク処理。"""
+    await interaction.response.defer()
+    status_msg = await interaction.followup.send(
+        f"📥 **Queued…**\n> {description[:120]}", wait=True
+    )
+    channel_id = interaction.channel_id or 0
+    await _run_job(status_msg, channel_id, description)
+
+
+# ── inbox ヘルパー（共通）─────────────────────────────────────────────────────
+
+def _handle_files_list() -> str:
+    """inbox 一覧テキストを返す。"""
+    files = list_inbox()
+    if not files:
+        return f"📭 inbox は空です。\n`{INBOX_DIR}` にファイルを置いてください。"
+    names = "\n".join(f"  • `{f.name}`" for f in files)
+    return f"📂 **inbox** ({len(files)} files)\n{names}"
+
+
+def _handle_files_reserve(channel_id: int, filename: str) -> str:
+    """filename を予約してメッセージを返す。エラー時はエラーメッセージを返す。"""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return f"⚠️ 無効なファイル名: `{filename}`"
+    src = INBOX_DIR / filename
+    if not src.exists():
+        return f"❓ inbox に `{filename}` が見つかりません。"
+    if channel_id not in _pending_inbox_files:
+        _pending_inbox_files[channel_id] = []
+    if filename not in _pending_inbox_files[channel_id]:
+        _pending_inbox_files[channel_id].append(filename)
+    queued = _pending_inbox_files[channel_id]
+    names = ", ".join(f"`{f}`" for f in queued)
+    return (
+        f"📎 `{filename}` を予約しました。\n"
+        f"予約中: {names}\n"
+        f"次の `/task` または `@Takumi <タスク>` で input/ にコピーされます。"
+    )
+
+
+# ── イベント ──────────────────────────────────────────────────────────────────
 
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
     log.info("Takumi V2 Bot ready: %s (id=%s)", bot.user, bot.user.id)
+    log.info("Slash commands synced.")
 
 
 @bot.event
@@ -234,7 +273,7 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("⚠️ タスクの内容が必要です。例: `!task この repo を調べて`")
+        await ctx.send("⚠️ タスクの内容が必要です。例: `/task description:この repo を調べて`")
     elif isinstance(error, commands.CommandNotFound):
         pass
     else:
@@ -242,70 +281,42 @@ async def on_command_error(ctx, error):
         await ctx.send(f"⚠️ エラー: {error}")
 
 
-@bot.command(name="task", help="タスクを投入して結果を返す")
-async def cmd_task(ctx, *, description: str):
-    await _process_task(ctx.message, description)
+# ── スラッシュコマンド ─────────────────────────────────────────────────────────
+
+@bot.tree.command(name="task", description="タスクを投入して結果を返す")
+@app_commands.describe(description="実行したいタスクの内容")
+async def slash_task(interaction: discord.Interaction, description: str):
+    await _process_task_interaction(interaction, description)
 
 
-@bot.command(name="status", help="job の現在状態を確認する")
-async def cmd_status(ctx, job_id: str):
-    from takumi.core.job_state import Job
+@bot.tree.command(name="status", description="job の現在状態を確認する")
+@app_commands.describe(job_id="確認する job の ID（例: job-20260415-xxxxxxxx）")
+async def slash_status(interaction: discord.Interaction, job_id: str):
     job = Job.load(job_id)
     if job is None:
-        await ctx.send(f"❓ job が見つかりません: `{job_id}`")
+        await interaction.response.send_message(
+            f"❓ job が見つかりません: `{job_id}`", ephemeral=True
+        )
         return
-    await ctx.send(embed=_build_embed(job))
+    await interaction.response.send_message(embed=_build_embed(job))
 
 
-@bot.command(name="ping", help="死活確認")
-async def cmd_ping(ctx):
-    await ctx.send(f"🏓 Pong! latency={bot.latency * 1000:.0f}ms  (Takumi V2)")
-
-
-@bot.command(name="files", help="inbox ファイル一覧 / 次のタスクに添付")
-async def cmd_files(ctx, filename: str | None = None):
-    """inbox のファイルを確認・予約する。
-
-    !files          — inbox の一覧を表示
-    !files data.csv — data.csv を次の @Takumi タスクの input/ にコピー予約
-    """
-    if filename is None:
-        # 一覧表示
-        files = list_inbox()
-        if not files:
-            await ctx.send(
-                f"📭 inbox は空です。\n"
-                f"`{INBOX_DIR}` にファイルを置いてください。"
-            )
-        else:
-            names = "\n".join(f"  • `{f.name}`" for f in files)
-            await ctx.send(f"📂 **inbox** ({len(files)} files)\n{names}")
-        return
-
-    # ファイルを予約（次の !task / @Takumi で input/ にコピーされる）
-    # パストラバーサルチェックは copy_from_inbox 内で行う
-    if "/" in filename or "\\" in filename or ".." in filename:
-        await ctx.send(f"⚠️ 無効なファイル名: `{filename}`")
-        return
-
-    src = INBOX_DIR / filename
-    if not src.exists():
-        await ctx.send(f"❓ inbox に `{filename}` が見つかりません。")
-        return
-
-    channel_id = ctx.channel.id
-    if channel_id not in _pending_inbox_files:
-        _pending_inbox_files[channel_id] = []
-    if filename not in _pending_inbox_files[channel_id]:
-        _pending_inbox_files[channel_id].append(filename)
-
-    queued = _pending_inbox_files[channel_id]
-    names = ", ".join(f"`{f}`" for f in queued)
-    await ctx.send(
-        f"📎 `{filename}` を予約しました。\n"
-        f"予約中: {names}\n"
-        f"次の `@Takumi <タスク>` で input/ にコピーされます。"
+@bot.tree.command(name="ping", description="死活確認")
+async def slash_ping(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        f"🏓 Pong! latency={bot.latency * 1000:.0f}ms  (Takumi V2)"
     )
+
+
+@bot.tree.command(name="files", description="inbox ファイル一覧 / 次のタスクにファイルを添付")
+@app_commands.describe(filename="添付するファイル名（省略すると一覧表示）")
+async def slash_files(interaction: discord.Interaction, filename: str | None = None):
+    channel_id = interaction.channel_id or 0
+    if filename is None:
+        await interaction.response.send_message(_handle_files_list())
+    else:
+        msg = _handle_files_reserve(channel_id, filename)
+        await interaction.response.send_message(msg)
 
 
 # ── エントリポイント ───────────────────────────────────────────────────────────

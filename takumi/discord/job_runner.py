@@ -1,15 +1,18 @@
 """takumi.discord.job_runner — V2 ジョブ実行パイプライン
 
 Discord gateway が呼ぶ同期ランナー。
-CP-LV2-02 スコープ: job状態管理 + 危険判定 + 実行(stub/API) + 結果返却
 
-Executor は ANTHROPIC_API_KEY があれば Anthropic API を使い、
-なければスタブとして応答する（sandbox 基盤の検証用）。
+Executor の選択（TAKUMI_EXECUTOR 環境変数）:
+  api          Anthropic API を使う（ANTHROPIC_API_KEY 必要）
+  claude-code  Claude Code CLI を使う（定額プラン / claude コマンド必要）
+  （未設定 or 空）ANTHROPIC_API_KEY があれば api、なければスタブ
 """
 
+import json
 import logging
 import os
 import re
+import subprocess
 from typing import Callable
 
 from takumi.core.job_state import Job, JobStatus, create_job
@@ -56,10 +59,22 @@ def _classify(task: str) -> str:
     return "auto_allow"
 
 
-# ── 実行（スタブ / Anthropic API）────────────────────────────────────────────
+# ── 実行（スタブ / Anthropic API / Claude Code CLI）──────────────────────────
 
 def _execute(job: Job) -> str:
-    """job.task を実行して結果文字列を返す。"""
+    """job.task を実行して結果文字列を返す。
+
+    TAKUMI_EXECUTOR 環境変数でバックエンドを選択:
+      claude-code  → Claude Code CLI（定額プラン / claude コマンド必要）
+      api          → Anthropic API（ANTHROPIC_API_KEY 必要）
+      （未設定）    → API key があれば api、なければスタブ
+    """
+    executor = os.environ.get("TAKUMI_EXECUTOR", "").lower()
+
+    if executor == "claude-code":
+        return _execute_claude_code(job)
+
+    # api モード（executor == "api" or 未設定）
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return f"[STUB] タスクを受け付けました: {job.task}"
@@ -75,6 +90,38 @@ def _execute(job: Job) -> str:
         return msg.content[0].text if msg.content else "(no output)"
     except Exception as exc:
         raise RuntimeError(f"API error: {exc}") from exc
+
+
+def _execute_claude_code(job: Job) -> str:
+    """Claude Code CLI でタスクを実行する（定額プラン対応）。
+
+    事前条件:
+      - `claude` コマンドが PATH にあること
+      - `claude auth login` 済みで Max/Pro プランのアカウントであること
+    """
+    try:
+        result = subprocess.run(
+            ["claude", "--print", "--output-format", "json", job.task],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "claude CLI が見つかりません。Claude Code をインストールして `claude auth login` を実行してください。"
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("タスクがタイムアウトしました（300秒）。")
+
+    if result.returncode != 0:
+        raise RuntimeError(f"claude CLI エラー: {result.stderr[:500]}")
+
+    # --output-format json の場合 {"result": "..."} 形式で返ってくる
+    try:
+        data = json.loads(result.stdout)
+        return data.get("result") or data.get("content") or result.stdout.strip()
+    except (json.JSONDecodeError, AttributeError):
+        return result.stdout.strip() or "(no output)"
 
 
 # ── パイプライン ──────────────────────────────────────────────────────────────
