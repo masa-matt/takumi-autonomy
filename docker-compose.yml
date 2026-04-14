@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  takumi-bot:
+    build: .
+    image: takumi-bot:latest
+    container_name: takumi-bot
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # runtime/ をホストにマウント — 再起動してもメモリ・レポートが残る
+    volumes:
+      - ./runtime:/app/runtime
+
+    # ログをローテーションする
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"

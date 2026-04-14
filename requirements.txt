@@ -1,0 +1,16 @@
+# Takumi Autonomy — Python dependencies
+#
+# インストール:
+#   pip install -r requirements.txt
+#
+# VPS / Docker 環境ではこのファイルを使う。
+# ローカル開発では仮想環境を推奨:
+#   python -m venv .venv && source .venv/bin/activate
+
+# Discord Bot
+discord.py>=2.3.2
+
+# Anthropic API (AgentSdkExecutor)
+anthropic>=0.25.0
+
+# (claude-code executor は claude CLI を別途インストールすること)

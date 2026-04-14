@@ -3,6 +3,7 @@ runtime/workspaces/jobs/*/
 runtime/reports/*.json
 runtime/approvals/*.json
 runtime/logs/*.log
+runtime/logs/claude_code/*.jsonl
 runtime/tmp/
 
 # Python
