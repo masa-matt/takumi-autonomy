@@ -1,148 +1,239 @@
-# Takumi Checkpoints
+# Takumi Local V2 Checkpoints
 
-## CP-00 仕様固定 ✅
+## CP-LV2-00 仕様固定
 
 ### 目的
-PoC の設計境界を固定する。
+V2 の設計境界を固定する。
 
 ### 通過条件
-- [x] Takumi Core / Hermes / Executor / Discord / VPS の責務分離が文書化されている
-- [x] API先行・Claude Code Team移行可能の前提が明記されている
-- [x] 危険操作・承認原則・停止条件が明文化されている
-- [x] MOR / PRR / PCR が定義されている
-- [x] `.claude/CLAUDE.md` の初版がある
+- [ ] ローカル版の目的が明文化されている
+- [ ] ホストと sandbox の役割分離が明記されている
+- [ ] Discord / Core / Hermes / Claude Code / Sandbox の責務が明記されている
+- [ ] IAM が必要なログ調査がスコープ外であると明記されている
+- [ ] 危険操作・承認原則・停止条件が明文化されている
+- [ ] MOR / PRR / PCR と sandbox 境界観測の方針が定義されている
+- [ ] `.claude/CLAUDE.md` の V2 初版がある
 
 ### 成果物
-- `docs/project-charter.md` ✅
-- `docs/architecture-baseline.md` ✅
-- `docs/checkpoints.md` ✅
-- `docs/claude-code-operating-rules.md` ✅
-- `.claude/CLAUDE.md` ✅
+- `docs/project-charter.md`
+- `docs/checkpoints.md`
+- `docs/claude/handoff-pack.md`
+- `.claude/CLAUDE.md`
 
 ### Git tag
-- `cp-00-spec-frozen` ✅
+- `cp-lv2-00-spec-frozen`
 
 ---
 
-## CP-01 最小実行縦断 ✅
+## CP-LV2-01 Job Sandbox 基盤
 
 ### 目的
-Task 投入から report 保存までの最小縦断を通す。
+1ジョブ1sandbox を作れる状態にする。
 
 ### 通過条件
-- [x] task を投入できる
-- [x] job id が発行される
-- [x] 1 job 1 workspace が作成される
-- [x] executor が 1 回実行される
-- [x] report が保存される
-- [x] 失敗時も記録が残る
+- [ ] job id ごとに workspace を作成できる
+- [ ] `input/`, `repos/`, `output/`, `logs/`, `state/` が分離される
+- [ ] 書き込み範囲が job 配下に限定される
+- [ ] job 完了後に成果物とログを回収できる
+- [ ] sandbox 境界の想定が文書化されている
 
 ### 成果物
-- `scripts/run_local.py` ✅ (Discord 代替の CLI ハーネス)
-- `apps/takumi-core/orchestration/job_runner.py` ✅
-- `apps/executor-gateway/` ✅ (base, workspace_manager, agent_sdk_executor)
-- `packages/schemas/` ✅ (task, execution_result)
-- `packages/utils/ids.py` ✅
-- `runtime/workspaces/` ✅
-- `runtime/reports/` ✅
+- `takumi/sandbox/`
+- `docs/architecture-baseline.md`
+- `docs/runbooks/sandbox.md`
 
 ### Git tag
-- `cp-01-minimum-vertical-slice` ✅
+- `cp-lv2-01-sandbox-base`
 
 ---
 
-## CP-02 承認と停止条件 ✅
+## CP-LV2-02 Discord 受付とジョブ状態管理
 
 ### 目的
-危険操作を勝手に進めず、止まるべき時に止まる。
+Discord から依頼してジョブとして扱える状態にする。
 
 ### 通過条件
-- [x] Auto Allow / Approval Required / Deny by Default の3分類がある
-- [x] 承認待ち状態を保存できる
-- [x] 承認なしで危険操作を実行しない
-- [x] retry 上限を超えたら停止する
-- [x] 停止理由を report に残せる
+- [ ] Discord から自然言語で依頼を受け取れる
+- [ ] job id を採番できる
+- [ ] job 状態を最低限 `queued / running / blocked / done / failed` で管理できる
+- [ ] 中間報告を返せる
+- [ ] 承認待ちメッセージを送れる
 
 ### 成果物
-- `apps/takumi-core/policy/approval_policy.py` ✅
-- `apps/takumi-core/policy/danger_classifier.py` ✅
-- `apps/takumi-core/orchestration/stop_conditions.py` ✅
-- `packages/schemas/approval_request.py` ✅
-- `apps/takumi-core/state/approval_store.py` ✅
-- `runtime/approvals/` ✅
+- `takumi/discord/`
+- `takumi/core/job_state.*`
+- `docs/runbooks/discord-ops.md`
 
 ### Git tag
-- `cp-02-safety-gates` ✅
+- `cp-lv2-02-discord-intake`
 
 ---
 
-## CP-03 Recall / Save ✅
+## CP-LV2-03 Repo / File 取り込み
 
 ### 目的
-毎回ゼロから始めない最小導線を入れる。
+ローカルファイルと複数 repo を sandbox に安全に取り込める状態にする。
 
 ### 通過条件
-- [x] task 前に `session_search` を呼べる
-- [x] task 後に `memory_write` を呼べる
-- [x] save/no-save ルールがある
-- [x] report に recall/save 実行有無が残る
-- [x] MOR / PRR を計測できる
+- [ ] ローカルファイルを sandbox の `input/` にコピーできる
+- [ ] 1つ以上の repo を sandbox に clone できる
+- [ ] 複数 repo を job 内で扱える
+- [ ] 元 repo の直編集を避ける設計になっている
+- [ ] repo / file の取り込みルールが文書化されている
 
 ### 成果物
-- `apps/hermes-bridge/session_search_api.py` ✅
-- `apps/hermes-bridge/memory_api.py` ✅
-- `apps/takumi-core/metrics/mor_prr.py` ✅
-- `packages/schemas/memory_entry.py` ✅
-- `runtime/memory/entries/` ✅
-- `runtime/memory/metrics.json` ✅
+- `takumi/core/input_ingress.*`
+- `takumi/core/repo_manager.*`
+- `docs/runbooks/repo-and-file-ingress.md`
 
 ### Git tag
-- `cp-03-recall-save-enabled` ✅
+- `cp-lv2-03-ingress`
 
 ---
 
-## CP-04 手続き化 ✅
+## CP-LV2-04 Hermes Recall / Save 統合
 
 ### 目的
-成功パターンを skill 化して再利用する。
+毎回ゼロから始めない状態を作る。
 
 ### 通過条件
-- [x] task 完了後に skill draft を作れる
-- [x] skill review の簡易フローがある
-- [x] skill を保存できる
-- [x] 次回 task でその skill を参照できる
-- [x] PCR を計測できる
+- [ ] `hermes_session_search` が呼べる
+- [ ] `hermes_memory_write` が呼べる
+- [ ] `hermes_skill_create` または `hermes_skill_update` が呼べる
+- [ ] セッション終了時に memory 候補を残せる
+- [ ] hooks または同等機構で Recall / Save のログが取れる
 
 ### 成果物
-- `apps/hermes-bridge/skill_api.py` ✅
-- `docs/skill-policy.md` ✅
-- `packages/skills/templates/skill-template.md` ✅
-- `packages/schemas/skill.py` ✅
-- `runtime/memory/skills/` ✅ (skill-20260414-... 実例あり)
+- `takumi/hermes_bridge/`
+- `docs/runbooks/hermes-bridge.md`
+- `docs/metrics.md`
 
 ### Git tag
-- `cp-04-proceduralization` ✅
+- `cp-lv2-04-hermes-bridge`
 
 ---
 
-## CP-05 Claude Code 移行準備 ✅
+## CP-LV2-05 単一 repo 調査・修正・検証
 
 ### 目的
-Claude Code へ executor を差し替えやすくする。
+1つの repo に対する実務的な調査と修正を回せる状態にする。
 
 ### 通過条件
-- [x] Claude 固有ルールが `.claude/` に集約されている
-- [x] Recall First / Save / Safety が `CLAUDE.md` に反映されている
-- [x] hooks 導線がある
-- [x] Executor interface を変えずに差し替え可能
+- [ ] 単一 repo の構造調査ができる
+- [ ] failing test / lint の原因調査ができる
+- [ ] 最小差分で修正できる
+- [ ] test / lint / diff を報告できる
+- [ ] handoff を残せる
 
 ### 成果物
-- `apps/executor-gateway/claude_code_executor.py` ✅
-- `.claude/CLAUDE.md` ✅ (Recall/Save/Skill/Safety/Hooks sections)
-- `.claude/settings.json` ✅ (PreToolUse/PostToolUse/Stop hooks)
-- `.claude/hooks/` ✅ (pre_tool_use.sh, post_tool_use.sh, session_stop.sh)
-- `docs/migration-to-claude-code-team.md` ✅
-- `scripts/run_local.py` ✅ (--executor flag: agent-sdk / claude-code)
+- `takumi/core/executor_adapter.*`
+- `docs/runbooks/single-repo-workflow.md`
+- `docs/examples/`
 
 ### Git tag
-- `cp-05-claude-code-ready` ✅
+- `cp-lv2-05-single-repo-flow`
+
+---
+
+## CP-LV2-06 複数 repo 比較と影響範囲整理
+
+### 目的
+複数 repo を使った比較・調査を安全に回せる状態にする。
+
+### 通過条件
+- [ ] 複数 repo を同一 job で取り扱える
+- [ ] API / interface / config の差分比較ができる
+- [ ] 影響範囲の要約を返せる
+- [ ] 危険な広範囲変更は実行せず止まれる
+- [ ] handoff に repo ごとの観測結果を残せる
+
+### 成果物
+- `docs/runbooks/multi-repo-analysis.md`
+- `docs/templates/comparison-report.md`
+
+### Git tag
+- `cp-lv2-06-multi-repo`
+
+---
+
+## CP-LV2-07 PR 本文案と PR Review
+
+### 目的
+PR を作る前段の実務を支援できる状態にする。
+
+### 通過条件
+- [ ] 差分から PR タイトル案を作れる
+- [ ] PR 本文案を作れる
+- [ ] review 観点を整理できる
+- [ ] PR review コメント草案を作れる
+- [ ] 実 PR 作成は承認境界の外にあると明示されている
+
+### 成果物
+- `docs/runbooks/pr-workflow.md`
+- `docs/templates/pr-body.md`
+- `docs/templates/pr-review.md`
+
+### Git tag
+- `cp-lv2-07-pr-support`
+
+---
+
+## CP-LV2-08 承認境界・停止条件・handoff 運用
+
+### 目的
+半自律運用として安全に回せる状態にする。
+
+### 通過条件
+- [ ] 要承認操作一覧が実装と docs の両方で一致している
+- [ ] 停止条件が実際に機能する
+- [ ] blocked 時に理由と必要入力を返せる
+- [ ] 毎セッションで handoff が残る
+- [ ] report / logs / memory candidates が残る
+
+### 成果物
+- `docs/runbooks/approval-and-stop-conditions.md`
+- `docs/handoff.md`
+- `docs/operating-rules.md`
+
+### Git tag
+- `cp-lv2-08-ops-safety`
+
+---
+
+## CP-LV2-09 V2 運用試験
+
+### 目的
+Discord からの依頼を通じて、V2 を実務に近い形で連続運用する。
+
+### 通過条件
+- [ ] 3件以上の実タスクを Discord 経由で処理した
+- [ ] 少なくとも1件で Recall が効いた
+- [ ] 少なくとも1件で memory が保存された
+- [ ] 少なくとも1件で skill 候補が出た
+- [ ] 危険操作で少なくとも1回正しく停止した
+- [ ] handoff / report の品質が維持された
+
+### 成果物
+- `reports/v2-trial-report.md`
+- `docs/retrospectives/`
+- `docs/metrics.md`
+
+### Git tag
+- `cp-lv2-09-trial-run`
+
+---
+
+## 判定メモ
+
+### checkpoint を通過とみなしてよい条件
+- docs と実装の両方がそろっている
+- 実際の確認手順が存在する
+- handoff で次回に引き継げる
+- 通過条件に対する証拠がある
+
+### 通過とみなしてはいけない条件
+- 実装だけあって docs がない
+- docs だけあって実体がない
+- 手動でしか分からない
+- 危険操作が曖昧
+- 次回に引き継げない

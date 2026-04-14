@@ -1,703 +1,650 @@
-# Takumi Autonomy on VPS
+# Takumi Local Autonomy V2 プロジェクト指示書
 
-## API先行・Claude Code Team移行可能なPoCアーキテクチャ設計
+## 1. プロジェクト名
 
-## 1. 目的
-
-このPoCの目的は、VPS上で常駐する半自律型AIエージェント基盤を作り、次のループを安定運用できるようにすること。
-
-**Observe → Compare → Think → Act → Report → Save → Repeat**
-
-このPoCでは、最初は **Claude API / Agent SDK** を使って私用環境で立ち上げる。
-
-ただし設計は、後から **Claude Code Team** に移行しても中核構造を変えずに済むようにする。
+**Takumi Local Autonomy V2**
 
 ---
 
-## 2. 設計方針
+## 2. このV2の位置づけ
 
-### 2.1 結論
+このV2は、前回の **Takumi Autonomy on VPS** PoC を土台にした、**ローカル向けの安全な半自律実行版** です。
 
-このPoCでは、Claude をシステムの中心にしない。
+V1 では主に次を成立させることを目指しました。
 
-中心に置くのは **Takumi Core** であり、Claude は **交換可能な実行エンジン** として扱う。
+- Takumi Core を司令塔にする
+- Hermes を記憶・過去参照・スキルの正本にする
+- Claude Code / Claude Executor を交換可能な実行エンジンとして扱う
+- Discord を人間との窓口にする
+- Recall → Act → Save を継続的に回す
 
-つまり役割は次のように固定する。
-
-- **Takumi Core**
-    
-    ジョブ管理、承認管理、停止条件、ログ、評価指標の司令塔
-    
-- **Hermes**
-    
-    記憶、過去参照、スキル保存の正本
-    
-- **Claude Executor**
-    
-    実行担当
-    
-    - PoCでは `Anthropic API / Agent SDK`
-    - 将来は `Claude Code Team`
-- **Discord**
-    
-    人間との実務インターフェース
-    
-- **VPS**
-    
-    常駐・保存・スケジュール実行基盤
-    
-
-### 2.2 この分離を採る理由
-
-この設計にすると、将来 Team へ移行するときに差し替えるのは **Executor 層だけ** で済む。
-
-Claude Code 側には hooks、`CLAUDE.md`、plugins、MCP など共有しやすい仕組みがあるので、共通ルールや拡張点は repo 側に寄せておくのが移行に強い。([Claude](https://code.claude.com/docs/en/hooks-guide))
+V2 では、これを **ローカル実務の代行** に寄せます。  
+ただし、ローカルPC本体を直接作業場にするのではなく、**ローカル内の隔離 sandbox / workspace を作業場にする** ことを前提とします。
 
 ---
 
-## 3. 全体アーキテクチャ
+## 3. このV2の目的
 
-```mermaid
-flowchart LR
-    U[User on Discord] --> D[Discord Bot Gateway]
+このV2の目的は、Discord から自然言語で仕事を依頼すると、ローカル環境上で Takumi が安全な範囲で半自律的に作業を進め、結果・差分・確認観点・handoff を返せるようにすることです。
 
-    D --> C[Takumi Core]
-    C --> P[Policy / Approval Engine]
-    C --> Q[Job Queue / Scheduler]
-    C --> R[Report Generator]
-    C --> M[Metrics Collector]
+このV2で目指すのは、次のような実務フローです。
 
-    C --> H[Hermes Memory Layer]
-    H --> H1[MEMORY / USER]
-    H --> H2[Session Search]
-    H --> H3[Skills Store]
+1. Discord で依頼を送る
+2. Takumi Core がジョブ化する
+3. 必要な repo / file を sandbox に取り込む
+4. Hermes で過去の判断や記録を参照する
+5. Claude Code が sandbox 内で作業する
+6. 途中で必要なら確認を求める
+7. 結果・確認観点・残課題を返す
+8. 学びを Hermes に保存する
+9. 再利用価値があれば skill 化する
 
-    C --> E[Executor Adapter]
+目標ループは次の通りです。
 
-    E --> A1[Anthropic API / Agent SDK]
-    E --> A2[Claude Code Team Adapter]
-
-    A1 --> W[Workspace / Sandbox / Repo]
-    A2 --> W
-
-    W --> L[Logs / Artifacts / Diffs / Test Results]
-    L --> C
-    C --> D
-```
+**Observe → Recall → Think → Act → Review → Report → Save → Repeat**
 
 ---
 
-## 4. レイヤー設計
+## 4. このV2でできるようにしたいこと
 
-## 4.1 Takumi Core
+このV2では、少なくとも次を扱える状態を目指します。
 
-Takumi Core は全体の司令塔であり、Claude 依存にしない。
-
-### 担当
-
-- タスク受付
-- 優先度判定
-- 危険操作の承認フロー
-- リトライ上限管理
-- タイムアウト管理
-- 停止条件
-- 実行レポート生成
-- 評価指標の集計
-
-### ポイント
-
-- 「考えるモデル」と「運用の意思決定」を分離する
-- 無限ループ防止を Core 側の責務にする
-- 危険操作の判定を executor 任せにしない
+- Discord から自然言語で依頼を受ける
+- 1つまたは複数の repo を sandbox 内に clone する
+- ローカルファイルを sandbox に受け渡す
+- repo の調査、質疑応答、コード修正、docs 更新を行う
+- テスト / lint / 差分確認を行う
+- PR 用の要約、タイトル、本文案を作成する
+- PR レビューを行う
+- 結果のレビュー観点を返す
+- Hermes に記憶・過去参照・skill 保存を行う
 
 ---
 
-## 4.2 Hermes Memory Layer
+## 5. 今回のスコープ外
 
-Hermes は **唯一の長期記憶の正本** にする。
+このV2では、最初から次は入れません。
 
-Claude 側の memory は補助であり、正本にしない。
+- IAM 権限が必要な本番ログ調査
+- 本番環境の直接変更
+- 自動デプロイ
+- 自動マージ
+- ホストOS全域への自由アクセス
+- 秘密情報の直接的な読み取り・保存
+- ローカルの普段使い領域をそのまま作業場にすること
 
-### 担当
+特に、**ログ調査はIAM権限未整備のため最初から除外** します。
+
+---
+
+## 6. システムコンセプト
+
+このV2では、各要素の役割を次のように固定します。
+
+### 6.1 Takumi Core の役割
+
+Takumi Core は司令塔です。
+
+担当範囲:
+
+- Discord からの依頼受付
+- ジョブID採番
+- 危険度判定
+- sandbox / workspace の作成
+- repo / file の投入管理
+- 実行計画の管理
+- 承認待ち制御
+- 停止条件の適用
+- リトライ制御
+- 実行結果の回収
+- report / handoff の管理
+- 評価指標の収集
+
+### 6.2 Claude Code / Claude Executor の役割
+
+Claude Code は主に実行担当です。
+
+担当範囲:
+
+- sandbox 内の repo 読み取り
+- コード編集
+- docs 更新
+- テスト実行
+- lint 実行
+- 差分確認
+- PR本文案作成
+- PRレビュー
+- 中間結果と最終結果の返却
+
+ただし、**ホスト本体を直接触る主体にはしない** ことを原則とします。
+
+### 6.3 Hermes の役割
+
+Hermes は外部認知基盤です。
+
+担当範囲:
 
 - 永続記憶
 - 過去セッション検索
-- 成功パターンの skill 化
-- session 単位の学びの蓄積
+- 再利用知見の保存
+- skill 化
+- 次回以降の Recall の土台
 
-### ポイント
+### 6.4 Discord の役割
 
-- **MEMORY / USER** は核だけ
-- 詳細手順は **skills**
-- 過去探索は **session_search**
-- ログが増えても、検索できる形で残す
+Discord は人間との業務窓口です。
 
-この切り方は、Hermes を外部認知基盤として使い、Recall と Save を外部化する方針と一致する。添付レポートでも、Hermes 側を「真の核記憶」とし、Claude 側は補助に留める方向が推奨されている。
+担当範囲:
 
----
+- タスク投入
+- 追加指示
+- 途中確認
+- 承認返答
+- 結果受信
+- handoff 確認
+- 方針修正
 
-## 4.3 Executor Adapter
+### 6.5 Local Host の役割
 
-Executor Adapter は、Takumi Core から見た「共通の実行インターフェース」。
+ローカルPCは **ホスト** です。  
+作業場ではありません。
 
-### 役割
+担当範囲:
 
-- プロンプト投入
-- ツール実行
-- コマンド実行
-- コード編集
-- テスト
-- 結果収集
+- Takumi Core の常駐
+- sandbox の生成
+- 実行ログの保存
+- Hermes の常駐
+- Discord bot の常駐
+- 必要なローカル入力の受け渡し
 
-### 実装候補
+### 6.6 Job Sandbox の役割
 
-- `agent_sdk_executor`
-- `claude_code_executor`
+sandbox は実際の作業場です。
 
-### 共通インターフェース例
+担当範囲:
 
-```tsx
-interface Executor {
-  plan(task: TaskContext): Promise<ExecutionPlan>
-  run(task: TaskContext): Promise<ExecutionResult>
-  resume(sessionId: string, input: string): Promise<ExecutionResult>
-  stop(sessionId: string): Promise<void>
-}
-```
-
-### 重要
-
-このインターフェースにより、API 版で作った上位ロジックをそのまま Team 側へ流用できる。
-
----
-
-## 5. API先行PoCの実行フロー
-
-```mermaid
-flowchart TD
-    A[Discordで依頼受信] --> B[Takumi Coreがタスク化]
-    B --> C[Hermesで過去参照]
-    C --> D[Policy Engineで危険度判定]
-    D -->|安全| E[Agent SDK Executorへ投入]
-    D -->|要確認| F[Discordで承認待ち]
-    F -->|承認| E
-    F -->|却下| Z[終了]
-
-    E --> G[Workspaceで編集 / 実行 / テスト]
-    G --> H[結果をTakumi Coreへ返却]
-    H --> I[Hermesへ記憶保存]
-    H --> J[必要ならSkill化]
-    H --> K[Discordへレポート送信]
-```
-
----
-
-## 6. 将来のClaude Code Team移行フロー
-
-```mermaid
-flowchart TD
-    A[Discordで依頼受信] --> B[Takumi Core]
-    B --> C[Hermesで過去参照]
-    C --> D[Policy Engine]
-    D -->|安全| E[Claude Code Executorへ投入]
-    D -->|要確認| F[Discord承認]
-    F -->|承認| E
-    F -->|却下| Z[終了]
-
-    E --> G[Claude Code session]
-    G --> H[MCPでHermes参照]
-    G --> I[hooksで計測 / 保存トリガ]
-    G --> J[Workspaceで編集 / 実行 / テスト]
-    J --> K[結果収集]
-    K --> L[Hermesへ保存]
-    L --> M[Discordへレポート]
-```
-
-Claude Code 側では hooks で context 注入、監査、通知、保護ファイルのブロック、再注入などを自動化できる。`CLAUDE.md` は毎セッション読み込まれ、project スコープでは source control で共有できる。plugin は skill / agent / hook をまとめて共有できる。これが Team 移行しやすい理由になる。([Claude](https://code.claude.com/docs/en/hooks-guide))
-
----
-
-## 7. PoCで固定するもの / 将来差し替えるもの
-
-## 7.1 固定するもの
-
-以下は API 版でも Team 版でも共通。
-
-- Discord bot
-- task schema
-- approval policy
-- danger operation classifier
-- Hermes memory schema
-- session search API
-- skill 保存ルール
-- report format
-- metrics format
-- workspace 構成
-- job state machine
-
-## 7.2 差し替えるもの
-
-以下だけ差し替える。
-
-- Claude 実行経路
-- 認証方法
-- 実行時フックの張り方
-- Claude 固有の共有パッケージ方法
-
----
-
-## 8. 共有境界の考え方
-
-## 8.1 Claude依存にしてよいもの
-
-- 実行時の推論
+- repo clone
+- 入力ファイル配置
 - コード編集
 - テスト実行
-- 一時的な session context
-- Claude Code hooks
-- Claude Code plugin packaging
-
-## 8.2 Claude依存にしてはいけないもの
-
-- 長期記憶の正本
-- 承認状態
-- 危険操作ルール
-- ジョブ履歴
-- 再試行回数
-- 停止条件
-- 成果物メタデータ
-- 評価指標
+- 生成物出力
+- 差分作成
+- 作業ログ保存
 
 ---
 
-## 9. ディレクトリ設計
+## 7. 設計の大原則
 
-```
-takumi-autonomy/
-├─ README.md
-├─ docs/
-│  ├─ architecture.md
-│  ├─ operating-principles.md
-│  ├─ approval-policy.md
-│  ├─ memory-policy.md
-│  ├─ skill-policy.md
-│  ├─ metrics.md
-│  └─ migration-to-claude-code-team.md
-│
-├─ .env.example
-├─ docker-compose.yml
-├─ Makefile
-├─ pyproject.toml
-│
-├─ apps/
-│  ├─ discord-bot/
-│  │  ├─ main.py
-│  │  ├─ commands/
-│  │  ├─ handlers/
-│  │  └─ views/
-│  │
-│  ├─ takumi-core/
-│  │  ├─ main.py
-│  │  ├─ orchestration/
-│  │  │  ├─ task_router.py
-│  │  │  ├─ job_runner.py
-│  │  │  ├─ retry_manager.py
-│  │  │  └─ stop_conditions.py
-│  │  ├─ policy/
-│  │  │  ├─ approval_policy.py
-│  │  │  ├─ danger_classifier.py
-│  │  │  └─ permission_matrix.py
-│  │  ├─ reporting/
-│  │  │  ├─ report_builder.py
-│  │  │  └─ discord_reporter.py
-│  │  ├─ metrics/
-│  │  │  ├─ mor.py
-│  │  │  ├─ prr.py
-│  │  │  ├─ pcr.py
-│  │  │  └─ runtime_metrics.py
-│  │  └─ state/
-│  │     ├─ job_store.py
-│  │     ├─ approval_store.py
-│  │     └─ execution_log.py
-│  │
-│  ├─ hermes-bridge/
-│  │  ├─ main.py
-│  │  ├─ memory_api.py
-│  │  ├─ session_search_api.py
-│  │  ├─ skill_api.py
-│  │  └─ adapters/
-│  │     └─ hermes_local.py
-│  │
-│  └─ executor-gateway/
-│     ├─ main.py
-│     ├─ base.py
-│     ├─ agent_sdk_executor.py
-│     ├─ claude_code_executor.py
-│     └─ workspace_manager.py
-│
-├─ packages/
-│  ├─ schemas/
-│  │  ├─ task.py
-│  │  ├─ execution_result.py
-│  │  ├─ approval_request.py
-│  │  └─ report_schema.py
-│  │
-│  ├─ prompts/
-│  │  ├─ system/
-│  │  │  ├─ takumi_core.md
-│  │  │  ├─ safety_rules.md
-│  │  │  └─ recall_rules.md
-│  │  ├─ task/
-│  │  └─ report/
-│  │
-│  ├─ skills/
-│  │  ├─ templates/
-│  │  └─ exported/
-│  │
-│  └─ utils/
-│     ├─ logging.py
-│     ├─ time.py
-│     └─ ids.py
-│
-├─ runtime/
-│  ├─ workspaces/
-│  │  ├─ jobs/
-│  │  └─ sandboxes/
-│  ├─ logs/
-│  │  ├─ app/
-│  │  ├─ jobs/
-│  │  └─ audits/
-│  ├─ reports/
-│  └─ tmp/
-│
-├─ integrations/
-│  ├─ discord/
-│  ├─ anthropic/
-│  ├─ claude-code/
-│  └─ hermes/
-│
-├─ .claude/
-│  ├─ CLAUDE.md
-│  ├─ settings.json
-│  ├─ hooks/
-│  └─ plugins/
-│
-└─ tests/
-   ├─ unit/
-   ├─ integration/
-   └─ e2e/
-```
+### 7.1 ホストを直接作業場にしない
+
+ローカルPC本体を Claude Code の直接作業領域にしないこと。  
+実行は **1ジョブ1sandbox** を原則とする。
+
+### 7.2 コピーイン / コピーアウトを基本にする
+
+必要な入力だけ sandbox に渡し、成果物だけ回収する。  
+ホスト上の任意ディレクトリを広く見せない。
+
+### 7.3 Repo は sandbox 内で clone する
+
+元 repo の直編集を避ける。  
+必要なら sandbox 内で clone し、変更は差分として回収する。
+
+### 7.4 外部状態はツールとして渡す
+
+自由な shell より、限定権限の MCP / Tool を優先する。  
+必要な外部状態は **見せる対象を絞った口** から渡す。
+
+### 7.5 Hermes を長期記憶の正本にする
+
+継続性の正本は Claude 側セッションではなく Hermes に置く。  
+毎回ゼロから始めない。
+
+### 7.6 危険判定は Core 側で行う
+
+危険操作の判定は Claude に委ねず、Takumi Core 側で管理する。
+
+### 7.7 速さより安全と再現性を優先する
+
+1回の派手な成功より、毎回安全に再現できることを優先する。
 
 ---
 
-## 10. ディレクトリごとの意味
+## 8. V2で重視する評価指標
 
-## `apps/takumi-core/`
+V1 の3指標はそのまま使います。
 
-司令塔。
+### 8.1 記憶操作率（MOR）
 
-このプロジェクトの中で最も重要。
+必要な学びを適切に Hermes に保存できているか。
 
-Claude を差し替えても、ここは変えない前提で作る。
+見ること:
 
-## `apps/hermes-bridge/`
+- 作業後に memory 候補が残るか
+- 保存内容が次回に効くか
+- ノイズ記憶が増えすぎていないか
 
-Hermes を API / MCP 的に外出しする層。
+### 8.2 過去参照率（PRR）
 
-最低限、次の3つを持つ。
+必要な場面で過去のセッションや判断を取りに行けているか。
 
-- `session_search`
-- `memory_write`
-- `skill_create`
+見ること:
 
-これは添付レポートの推奨と同じ。
+- 類似タスク時に `session_search` を使ったか
+- 前回の失敗を繰り返していないか
+- 既存設計を踏まえた行動ができたか
 
-## `apps/executor-gateway/`
+### 8.3 手続き化率（PCR）
 
-Claude 実行アダプタ層。
+成功パターンを再利用可能な形で残せているか。
 
-ここが API 版と Team 版の切替点。
+見ること:
 
-## `.claude/`
+- skill 化されたか
+- 次回に使える手順として整理されたか
+- 単発で終わっていないか
 
-将来 Claude Code Team に寄せるための共有資産置き場。
+### 8.4 sandbox 境界遵守率
 
-ここには project 共有可能な `CLAUDE.md`、settings、hooks、plugin 関連を置く。`CLAUDE.md` は project 共有指示として source control に乗せられる。([Claude](https://code.claude.com/docs/en/memory))
+sandbox の外に出ずに作業できたか。
 
----
+見ること:
 
-## 11. Claude Code Team移行を見据えた `.claude/` 設計
+- 許可範囲外アクセスをしなかったか
+- write 範囲が job 単位で閉じているか
+- ホスト本体への危険な接触がなかったか
 
-## 11.1 `./.claude/CLAUDE.md`
+### 8.5 承認停止率
 
-用途:
+止まるべき場面で止まれたか。
 
-- プロジェクト共通ルール
-- 危険操作の基本方針
-- Hermes 利用ルール
-- 過去参照の作法
+見ること:
 
-例:
-
-```markdown
-# Takumi Claude Code Rules
-
-## Core Principles
-- Do not guess when unsure.
-- Prefer recall before re-deciding.
-- Save reusable learnings after completion.
-- Ask for approval before destructive or external-impact operations.
-
-## Recall Rules
-- If a task may depend on prior decisions, use Hermes session search first.
-- Treat Hermes as the source of truth for persistent memory.
-
-## Save Rules
-- Save only durable learnings.
-- Convert repeatable successful procedures into skills.
-- Do not save secrets, tokens, or raw credentials.
-
-## Safety Rules
-- Never delete important files without approval.
-- Never change production or external services without approval.
-- Never write irreversible changes without an approval event.
-```
-
-`CLAUDE.md` は「毎回説明し直す内容」を置く場所で、多段手順や局所的ルールは skill や path-scoped rule へ寄せるのが公式推奨。([Claude](https://code.claude.com/docs/en/memory))
-
-## 11.2 `.claude/settings.json`
-
-ここでは Team 移行時に効く設定を管理する。
-
-想定用途:
-
-- hooks
-- permissions
-- MCP server 定義
-- path rule
-- local 除外
-
-## 11.3 `.claude/plugins/`
-
-正式に plugin 化するときの置き場。
-
-plugin は skills / agents / hooks をまとめて共有でき、複数 project で使い回しやすい。共有したい機能が増えてきたら `.claude/` の素置きから plugin へ昇格させるのが自然。([Claude](https://code.claude.com/docs/en/plugins))
+- push / 外部書き込み / 不可逆操作前に停止したか
+- 承認なしで進んでいないか
 
 ---
 
-## 12. Hermes Bridge の最小インターフェース
+## 9. 行動原則
 
-```tsx
-interface HermesBridge {
-  sessionSearch(query: string, scope?: SearchScope): Promise<SearchResult>
-  memoryWrite(input: MemoryEntry): Promise<WriteResult>
-  skillCreate(input: SkillDraft): Promise<SkillResult>
-  skillUpdate(input: SkillDraft): Promise<SkillResult>
-}
-```
+### 9.1 ごまかさない
+分からないことは分からないと明示する。
 
-### 返却イメージ
+### 9.2 毎回ゼロから始めない
+過去の記録、判断、skill を優先して参照する。
 
-```json
-{
-  "hits": [
-    {
-      "session_id": "sess_123",
-      "timestamp": "2026-04-13T10:00:00Z",
-      "summary": "以前このrepoでは migration 前に dry-run を必須にしていた"
-    }
-  ],
-  "summary": "過去には本番影響のある migration は必ず dry-run と approval を経由していた"
-}
+### 9.3 作業だけで終わらない
+結果・学び・次回に使える形を残す。
+
+### 9.4 勝手に危険なことをしない
+危険操作は止まる。
+
+### 9.5 ホストに触れすぎない
+必要な入力だけを見る。  
+必要な成果物だけ返す。
+
+### 9.6 1ジョブ1ワークスペース
+作業の混線を防ぐ。
+
+### 9.7 shell の自由度を上げすぎない
+限定ツールを優先する。
+
+### 9.8 人間の認知負荷を下げる
+普段は自走し、必要時のみ確認する。
+
+---
+
+## 10. 基本実行手順
+
+1. Discord から依頼を受ける
+2. タスクの種類と危険度を判定する
+3. sandbox を作成する
+4. 必要な file / repo を sandbox に取り込む
+5. Hermes で過去参照を行う
+6. 必要なら実行計画を作る
+7. 承認必要性を判定する
+8. 承認不要なら sandbox 内で実行する
+9. 結果を整理する
+10. 確認観点を含めて report する
+11. 学びを Hermes に保存する
+12. 必要なら skill 化する
+13. handoff を残す
+
+---
+
+## 11. Recall First ルール
+
+次の場合は、原則として Hermes の過去参照を先に行います。
+
+- 同じ repo を以前にも扱った可能性がある
+- 同系統の issue / 修正 / PR を以前に扱った
+- 設計判断が絡む
+- 以前の方針と矛盾しそう
+- 同じ失敗を繰り返しやすい
+- skill 化できそうな定型作業
+
+ただし、完全に独立した軽作業では省略してよいです。
+
+---
+
+## 12. 入力と作業領域の原則
+
+### 12.1 ローカルファイルの受け渡し
+
+ローカルファイルは直接ホスト上で編集させず、sandbox の `input/` にコピーして渡します。
+
+### 12.2 repo の扱い
+
+repo は原則として sandbox の `repos/` に clone します。  
+ホスト上の作業中 repo を直接編集させません。
+
+### 12.3 成果物の回収
+
+成果物は `output/` にまとめ、必要なものだけ人間がレビューして回収します。
+
+### 12.4 推奨ディレクトリ構成
+
+```text
+takumi/
+  jobs/
+    <job-id>/
+      input/
+      repos/
+      output/
+      logs/
+      state/
 ```
 
 ---
 
-## 13. Approval Engine の設計
+## 13. MCP / Tool の基本方針
 
-## 13.1 原則
+このV2では、自由な shell 操作を広げすぎず、次のような限定ツールを優先します。
 
-承認は Claude 側ではなく Takumi Core 側で判定する。
+### 13.1 必須系
+- Hermes Bridge MCP
+  - `hermes_session_search`
+  - `hermes_memory_write`
+  - `hermes_skill_create`
+  - `hermes_skill_update`
 
-## 13.2 判定レベル
+- Workspace MCP
+  - `create_job_workspace`
+  - `list_job_files`
+  - `read_job_file`
+  - `write_job_output`
+  - `collect_artifacts`
 
-### Auto Allow
+- Repo MCP
+  - `clone_repo`
+  - `list_repos`
+  - `prepare_branch`
+  - `get_diff`
+  - `create_patch`
 
+### 13.2 任意拡張
+- `run_project_tests`
+- `run_lint`
+- `search_codebase`
+- `draft_pr_body`
+- `review_pr_diff`
+- `summarize_review_comments`
+
+---
+
+## 14. 危険操作の定義
+
+次は原則として要承認です。
+
+- ホストへの書き戻し
+- 元 repo への push
+- PR の実作成
+- 外部サービスへの書き込み
+- secrets の使用
+- 複数 repo にまたがる大規模変更
+- 不可逆な削除
+- sandbox 境界の変更
+
+次は条件付きで自動許可候補です。
+
+- sandbox 内 clone
+- sandbox 内編集
 - 読み取り
-- ローカル編集
+- テスト
 - lint
-- unit test
-- diff確認
-- 安全なログ収集
-- 過去参照
-- 記憶保存
-- skill保存
-
-### Approval Required
-
-- 重要ファイル削除
-- 権限変更
-- 永続設定変更
-- 外部サービス書き込み
-- 機密送信
-- 本番環境操作
-- force push
-- secret操作
-- 広範囲処理
-
-### Deny by Default
-
-- ルール外の危険操作
-- policyで未分類の高リスク実行
-- 停止条件に抵触した再試行
+- 差分確認
+- docs 更新
+- PR 本文案生成
+- PR review
+- Hermes 保存
 
 ---
 
-## 14. Workspace設計
+## 15. 停止条件
 
-Claude Code のセキュリティ資料では、書き込みは開始ディレクトリ配下に制限され、機密性の高い操作には承認が必要で、ネットワーク系操作も標準では承認対象になる。非対話の `-p` では trust verification の挙動も変わるため、PoC でも workspace 分離は最初から入れておくべきです。([Claude](https://code.claude.com/docs/en/security))
+次のいずれかに当たったら自動実行を止めます。
 
-### ルール
+- 承認が必要な操作に到達した
+- sandbox 外アクセスが必要になった
+- 秘密情報に触れる必要が出た
+- 失敗原因不明のまま再試行しようとしている
+- 影響範囲が想定より広い
+- 複数 repo 変更が想定より危険
+- 必要な入力が足りない
+- ログ / handoff / report を残せない
 
-- 1ジョブ1ワークスペース
-- 元repo直編集を避ける
-- worktree または sandbox を使う
-- 成果物と監査ログを残す
-- 失敗ジョブは隔離して残す
+停止時は、次を報告します。
 
-### 例
-
-```
-runtime/workspaces/jobs/job-20260413-001/
-├─ repo/
-├─ artifacts/
-├─ logs/
-└─ result.json
-```
+- どこまで進んだか
+- なぜ止まったか
+- 次に必要な判断
+- 再開に必要な入力
 
 ---
 
-## 15. 評価指標
+## 16. リトライ原則
 
-添付レポートに沿って、PoC の評価指標はこの3つを中核にする。
+再試行してよい条件:
 
-## 15.1 MOR
+- 原因仮説がある
+- 前回と異なる試行がある
+- sandbox 内で完結する
+- ログが残っている
 
-**Memory Operation Rate**
+再試行してはいけない条件:
 
-- `memory_write` 呼び出し率
-- 有効保存率
-- 重複拒否率
-
-## 15.2 PRR
-
-**Past Reference Rate**
-
-- `session_search` 呼び出し率
-- 過去依存タスクでの参照率
-
-## 15.3 PCR
-
-**Proceduralization Rate**
-
-- task 完了後の skill 化率
-- 保存済み skill の再利用率
+- 原因不明のまま繰り返す
+- 同じコマンドを説明なしで連打する
+- 承認が必要な操作を承認なしで再実行する
 
 ---
 
-## 16. 実装フェーズ
+## 17. セキュリティ原則
 
-## Phase 1
+- 最小権限
+- 最小公開
+- 1ジョブ1sandbox
+- ホスト本体の分離
+- secrets 分離
+- 外部状態は限定ツール経由
+- 記憶保存対象の選別
+- 監査可能なログ
+- 危険操作前の停止
 
-最小常駐PoC
-
-- Discord bot
-- Takumi Core
-- Hermes Bridge
-- Agent SDK executor
-- approval flow
-- basic logging
-
-## Phase 2
-
-半自律化
-
-- retry上限
-- stop conditions
-- report整備
-- metrics収集
-
-## Phase 3
-
-記憶定着
-
-- session_search強化
-- memory save基準
-- save/no-save分類
-- recall first運用
-
-## Phase 4
-
-手続き化
-
-- skill draft生成
-- skill reviewフロー
-- 再利用検知
-- exported skills 管理
-
-## Phase 5
-
-Claude Code Team移行準備
-
-- `.claude/CLAUDE.md` 整備
-- hooks 整備
-- MCP 接続
-- plugin 化
-- `claude_code_executor` 実装
+### 保存してはいけないもの
+- APIキー
+- トークン
+- パスワード
+- SSH秘密鍵
+- 個人情報の生データ
+- 機密の原文そのまま
+- 一時的で価値の低いノイズ
 
 ---
 
-## 17. いま作るべき最小スコープ
+## 18. ログとレポート
 
-最初のPoCでは、全部作らない。
+### 必ず残すもの
+- job id
+- 開始時刻 / 終了時刻
+- sandbox id / workspace path
+- 対象 repo / file
+- 危険度判定
+- 承認有無
+- 実行内容の要約
+- 成功 / 失敗
+- 主要エラー
+- 保存した memory
+- 作成 / 更新した skill
+- 次の推奨アクション
 
-### 最小で作るもの
-
-- Discord → Core → Agent SDK → Workspace の一連
-- Hermes の `session_search`
-- Hermes の `memory_write`
-- 危険操作の承認待ち
-- ジョブレポート
-- MOR / PRR / PCR のログ
-
-### まだ作らないもの
-
-- 完全自動 cron 自律運用
-- 複数 executor 同時運用
-- 本番環境の自動操作
-- 複雑な plugin 配布
-- 高度な multi-agent 化
+### report で伝えること
+- 依頼内容
+- 実行内容
+- 変更結果
+- 検証結果
+- 確認観点
+- 残課題
+- 保存した学び
+- 次回の最短手
 
 ---
 
-## 18. 一言まとめ
+## 19. フェーズ設計
 
-このPoCの本質は、
+### Phase 1: ローカル sandbox 足場
+目的: ローカルPC上で安全に job sandbox を作れる状態にする
 
-**Claude で賢くすることではなく、毎回ゼロから始めない構造を作ること**
+やること:
+- job workspace 作成
+- input / output / logs の分離
+- repo clone の最小実装
+- sandbox 書き込み範囲の制限
 
-にある。
+成功条件:
+- ホスト本体ではなく sandbox で作業できる
+- job 単位で隔離される
 
-そのために、
+### Phase 2: Discord 実務導線
+目的: Discord から仕事を投げてジョブ化できる状態にする
 
-- **Takumi Core** を司令塔にする
-- **Hermes** を記憶の正本にする
-- **Claude** を交換可能な実行エンジンにする
-- **Discord** を承認と報告の窓口にする
-- **VPS** を常駐と保存の土台にする
+やること:
+- タスク投入
+- ジョブ状態管理
+- 途中報告
+- 承認待ち導線
 
-という構成を採る。
+成功条件:
+- Discord から自然言語で依頼できる
+- 結果が Discord に返る
 
-これにより、今は API で進め、後から Claude Code Team に寄せても、
+### Phase 3: Hermes 統合
+目的: 毎回ゼロから始めない状態を作る
 
-ゴールを見失わずに段階的に強化できる。
+やること:
+- session_search
+- memory_write
+- skill_create / update
+- hooks による保存 / 計測
+
+成功条件:
+- 過去参照できる
+- 学びが残る
+- 同系タスクで説明量が減る
+
+### Phase 4: Repo / PR ワークフロー
+目的: 実務的な修正・提案・レビューを回せる状態にする
+
+やること:
+- code 修正
+- テスト / lint
+- PR本文案
+- PR review
+- 複数 repo 比較
+
+成功条件:
+- 調査 / 修正 / PR支援 / レビューを回せる
+
+### Phase 5: 運用安定化
+目的: 半自律運用として安全に継続できる状態にする
+
+やること:
+- 承認境界の調整
+- 停止条件の検証
+- 指標観測
+- handoff 品質改善
+
+成功条件:
+- 暴走しない
+- 止まるべき時に止まる
+- 次回に知見が残る
+
+---
+
+## 20. 成功の定義
+
+このV2の成功は、一度うまく動くことではありません。  
+次を継続的に満たせることを成功とします。
+
+- Discord から自然言語で依頼できる
+- ローカル作業を sandbox 内で安全に代行できる
+- repo / file を限定的に扱える
+- Claude Code が調査・修正・PR支援・レビューを行える
+- 危険操作では止まる
+- handoff / report / logs が毎回残る
+- Hermes に知見が蓄積される
+- 同じ作業が徐々に軽くなる
+
+---
+
+## 21. 優先順位
+
+迷ったときは次の順で優先します。
+
+1. 安全性
+2. 境界の明確さ
+3. 継続性
+4. 再現性
+5. 記憶と過去参照
+6. 手続き化
+7. 自律性
+8. 速度
+9. 見た目
+
+---
+
+## 22. このV2で避けるべき失敗
+
+- ローカル本体をそのまま作業場にする
+- sandbox 境界が曖昧
+- repo を直編集する
+- 説明なしに shell を広く許す
+- secrets が混ざる
+- 過去参照が行われない
+- memory がノイズだらけになる
+- skill が増えるだけで再利用されない
+- 危険操作で止まれない
+- handoff が残らず次回が苦しい
+
+---
+
+## 23. エージェントへの作業指示
+
+- まず現状を整理する
+- 次に既存資料と過去記録を参照する
+- 必要な入力だけ受け取る
+- sandbox 内で最小差分で進める
+- 危険なら止まる
+- 終了時に結果・学び・次回の最短手を残す
+- 再利用価値があれば Hermes に残す
+- 同じ問題を次回はより軽く解けるようにする
+
+---
+
+## 24. 合言葉
+
+**ローカル本体を直接触らせない。**  
+**必要なものだけ渡す。**  
+**覚える、参照する、残す。**  
+**静かに、安全に、自律する。**

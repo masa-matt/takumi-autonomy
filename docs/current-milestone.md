@@ -1,82 +1,33 @@
 # Current Milestone
 
-## Status: CP-05 Complete → All checkpoints passed
+## 現在の phase
+Phase 1: ローカル sandbox 足場
 
-Updated: 2026-04-14
+## 現在の checkpoint
+CP-LV2-00 仕様固定
 
----
+## この checkpoint の目的
+ローカル向けV2の境界を先に固定し、以後の実装がブレないようにする。
 
-## CP-00 完了 (Spec Frozen)
+## 今回そろっているべきもの
+- V2 の project charter
+- V2 の checkpoints
+- V2 用 Handoff Pack
+- V2 用 `.claude/CLAUDE.md`
+- V2 用 kickoff prompt
+- session brief / handoff の雛形
 
-以下の成果物がすべて揃い、CP-00 の通過条件を満たした。
+## 今回まだ作り込まないもの
+- IAM が必要なログ調査
+- 本番アクセス
+- push / PR の自動実行
+- 広範囲な shell 自由化
 
-| 成果物 | 状態 |
-|---|---|
-| `docs/project-charter.md` | ✅ 全体アーキテクチャ設計完成 |
-| `docs/architecture-baseline.md` | ✅ アーキテクチャ基準スナップショット |
-| `docs/checkpoints.md` | ✅ 全 CP 基準定義済み |
-| `docs/claude-code-operating-rules.md` | ✅ Claude 固有操作ルール |
-| `.claude/CLAUDE.md` | ✅ 非交渉ルール v1 |
+## この checkpoint の通過判定
+- docs がそろっている
+- 境界が明文化されている
+- 承認が必要な操作が明文化されている
+- sandbox first が設計原則として固定されている
 
-Git tag: `cp-00-spec-frozen`
-
----
-
-## CP-01 進行中 (Minimum Vertical Slice)
-
-### 目標
-Task 投入から Report 保存までの最小縦断を通す。
-
-### 通過条件チェックリスト
-
-- [x] task を投入できる (`scripts/run_local.py`)
-- [x] job id が発行される
-- [x] 1 job 1 workspace が作成される (`runtime/workspaces/jobs/{job_id}/`)
-- [x] executor が 1 回実行される (stub mode で検証済み / API キー設定で実 API)
-- [x] report が保存される (`runtime/reports/{job_id}.json`)
-- [x] 失敗時も記録が残る (import エラー時も report 保存確認)
-
-### 実装対象ファイル
-
-```
-apps/
-  takumi-core/
-    orchestration/
-      job_runner.py
-  executor-gateway/
-    base.py
-    workspace_manager.py
-    agent_sdk_executor.py
-packages/
-  schemas/
-    task.py
-    execution_result.py
-  utils/
-    ids.py
-runtime/
-  workspaces/
-  reports/
-scripts/
-  run_local.py
-```
-
-### 検証コマンド
-
-```bash
-python scripts/run_local.py --task "list files in workspace"
-```
-
-期待される結果:
-- `runtime/workspaces/jobs/job-YYYYMMDD-XXXXXXXX/` が作成されている
-- `runtime/reports/job-YYYYMMDD-XXXXXXXX.json` が存在する
-- report に `job_id`, `status: done`, `result` が含まれている
-
----
-
-## 次の CP-01 完了後: CP-02
-
-CP-01 検証完了後、CP-02 (Safety Gates) へ進む。
-
-- Auto Allow / Approval Required / Deny の3分類実装
-- 承認待ち状態の永続化
-- retry 上限の実装
+## 次の checkpoint
+CP-LV2-01 Job Sandbox 基盤
