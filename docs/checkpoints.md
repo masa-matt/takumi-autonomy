@@ -76,25 +76,28 @@ Task 投入から report 保存までの最小縦断を通す。
 
 ---
 
-## CP-03 Recall / Save
+## CP-03 Recall / Save ✅
 
 ### 目的
 毎回ゼロから始めない最小導線を入れる。
 
 ### 通過条件
-- [ ] task 前に `session_search` を呼べる
-- [ ] task 後に `memory_write` を呼べる
-- [ ] save/no-save ルールがある
-- [ ] report に recall/save 実行有無が残る
-- [ ] MOR / PRR を計測できる
+- [x] task 前に `session_search` を呼べる
+- [x] task 後に `memory_write` を呼べる
+- [x] save/no-save ルールがある
+- [x] report に recall/save 実行有無が残る
+- [x] MOR / PRR を計測できる
 
 ### 成果物
-- `session_search_api.py`
-- `memory_api.py`
-- recall/save integration test
+- `apps/hermes-bridge/session_search_api.py` ✅
+- `apps/hermes-bridge/memory_api.py` ✅
+- `apps/takumi-core/metrics/mor_prr.py` ✅
+- `packages/schemas/memory_entry.py` ✅
+- `runtime/memory/entries/` ✅
+- `runtime/memory/metrics.json` ✅
 
 ### Git tag
-- `cp-03-recall-save-enabled`
+- `cp-03-recall-save-enabled` ✅
 
 ---
 

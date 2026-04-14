@@ -8,19 +8,24 @@ from agent_sdk_executor import AgentSdkExecutor
 from approval_policy import ApprovalPolicy
 from approval_store import save as save_approval
 from stop_conditions import RetryState
+from session_search_api import search_sessions
+from memory_api import write_memory
+from mor_prr import record_job_start, record_search, record_write
 
 
 class JobRunner:
-    """Orchestrates the full job lifecycle (CP-01 + CP-02).
+    """Orchestrates the full job lifecycle (CP-01 + CP-02 + CP-03).
 
     Flow:
-      1. Issue job ID
-      2. Classify task danger level
-      3. Evaluate approval (Auto Allow / Approval Required / Deny)
-      4. Save approval record
-      5. Create workspace
-      6. Execute with retry loop (up to max_retries)
-      7. Save report with stop_reason if applicable
+      1.  Issue job ID + record job start (metrics)
+      2.  Recall: session_search before any decision (Recall First rule)
+      3.  Classify danger level + evaluate approval
+      4.  Save approval record
+      5.  If denied → save report (no memory write), return
+      6.  Create workspace
+      7.  Execute with retry loop (up to max_retries)
+      8.  Save: write_memory after execution (with save/no-save rules)
+      9.  Save report with recall + save audit trail
     """
 
     def __init__(self, executor=None, auto_approve: bool = False, max_retries: int = 3):
@@ -38,9 +43,24 @@ class JobRunner:
         job_id = generate_job_id()
         task = Task(description=task_description)
         job = Job(job_id=job_id, task=task)
+        record_job_start()
         print(f"[{job_id}] Job created    status=PENDING")
 
-        # ── 2-4. Approval gate ────────────────────────────────────────────────
+        # ── 2. Recall First ───────────────────────────────────────────────────
+        record_search()
+        search_result = search_sessions(task_description)
+        recall_summary = {
+            "called": True,
+            "hits_count": len(search_result.hits),
+            "total_searched": search_result.total_searched,
+            "top_hit_task": search_result.hits[0].task if search_result.hits else None,
+        }
+        if search_result.hits:
+            print(f"[{job_id}] Recall         {len(search_result.hits)} hit(s) / {search_result.total_searched} searched")
+        else:
+            print(f"[{job_id}] Recall         no past sessions ({search_result.total_searched} searched)")
+
+        # ── 3-4. Approval gate ────────────────────────────────────────────────
         print(f"[{job_id}] Classifying…   '{task_description[:60]}'")
         approval = self.policy.evaluate(job_id, task_description)
         save_approval(approval)
@@ -51,8 +71,13 @@ class JobRunner:
             job.error = approval.reason
             job.started_at = datetime.utcnow()
             job.completed_at = datetime.utcnow()
-            # No workspace needed for denied jobs
-            report_path = save_report(job, result=None, stop_reason=approval.reason)
+            save_result_obj = None  # denied jobs are never saved
+            report_path = save_report(
+                job, result=None,
+                stop_reason=approval.reason,
+                recall=recall_summary,
+                save={"called": False, "saved": False, "skip_reason": "job denied by policy"},
+            )
             print(f"[{job_id}] Report saved   {report_path}")
             return job, report_path
 
@@ -96,8 +121,21 @@ class JobRunner:
 
         job.completed_at = datetime.utcnow()
 
-        # ── 7. Save report ────────────────────────────────────────────────────
-        report_path = save_report(job, result, stop_reason=retry_state.stop_reason)
+        # ── 7. Save memory ────────────────────────────────────────────────────
+        save_result_obj = write_memory(job, result, approval=approval)
+        record_write(save_result_obj.saved)
+        if save_result_obj.saved:
+            print(f"[{job_id}] Memory saved   {save_result_obj.entry_id}")
+        else:
+            print(f"[{job_id}] Memory skip    {save_result_obj.skip_reason}")
+
+        # ── 8. Save report ────────────────────────────────────────────────────
+        report_path = save_report(
+            job, result,
+            stop_reason=retry_state.stop_reason,
+            recall=recall_summary,
+            save=save_result_obj.to_dict(),
+        )
         print(f"[{job_id}] Report saved   {report_path}")
 
         return job, report_path

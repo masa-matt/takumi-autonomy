@@ -1,6 +1,6 @@
 # Current Milestone
 
-## Status: CP-02 Complete → CP-03 In Progress
+## Status: CP-03 Complete → CP-04 In Progress
 
 Updated: 2026-04-14
 
