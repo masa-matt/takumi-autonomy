@@ -1,74 +1,78 @@
 # Takumi Checkpoints
 
-## CP-00 仕様固定
+## CP-00 仕様固定 ✅
 
 ### 目的
 PoC の設計境界を固定する。
 
 ### 通過条件
-- [ ] Takumi Core / Hermes / Executor / Discord / VPS の責務分離が文書化されている
-- [ ] API先行・Claude Code Team移行可能の前提が明記されている
-- [ ] 危険操作・承認原則・停止条件が明文化されている
-- [ ] MOR / PRR / PCR が定義されている
-- [ ] `.claude/CLAUDE.md` の初版がある
+- [x] Takumi Core / Hermes / Executor / Discord / VPS の責務分離が文書化されている
+- [x] API先行・Claude Code Team移行可能の前提が明記されている
+- [x] 危険操作・承認原則・停止条件が明文化されている
+- [x] MOR / PRR / PCR が定義されている
+- [x] `.claude/CLAUDE.md` の初版がある
 
 ### 成果物
-- `docs/project-charter.md`
-- `docs/architecture-baseline.md`
-- `docs/checkpoints.md`
-- `docs/claude-code-operating-rules.md`
-- `.claude/CLAUDE.md`
+- `docs/project-charter.md` ✅
+- `docs/architecture-baseline.md` ✅
+- `docs/checkpoints.md` ✅
+- `docs/claude-code-operating-rules.md` ✅
+- `.claude/CLAUDE.md` ✅
 
 ### Git tag
-- `cp-00-spec-frozen`
+- `cp-00-spec-frozen` ✅
 
 ---
 
-## CP-01 最小実行縦断
+## CP-01 最小実行縦断 ✅
 
 ### 目的
 Task 投入から report 保存までの最小縦断を通す。
 
 ### 通過条件
-- [ ] task を投入できる
-- [ ] job id が発行される
-- [ ] 1 job 1 workspace が作成される
-- [ ] executor が 1 回実行される
-- [ ] report が保存される
-- [ ] 失敗時も記録が残る
+- [x] task を投入できる
+- [x] job id が発行される
+- [x] 1 job 1 workspace が作成される
+- [x] executor が 1 回実行される
+- [x] report が保存される
+- [x] 失敗時も記録が残る
 
 ### 成果物
-- `apps/discord-bot/` または代替入力導線
-- `apps/takumi-core/`
-- `apps/executor-gateway/`
-- `runtime/workspaces/`
-- `runtime/reports/`
+- `scripts/run_local.py` ✅ (Discord 代替の CLI ハーネス)
+- `apps/takumi-core/orchestration/job_runner.py` ✅
+- `apps/executor-gateway/` ✅ (base, workspace_manager, agent_sdk_executor)
+- `packages/schemas/` ✅ (task, execution_result)
+- `packages/utils/ids.py` ✅
+- `runtime/workspaces/` ✅
+- `runtime/reports/` ✅
 
 ### Git tag
-- `cp-01-minimum-vertical-slice`
+- `cp-01-minimum-vertical-slice` ✅
 
 ---
 
-## CP-02 承認と停止条件
+## CP-02 承認と停止条件 ✅
 
 ### 目的
 危険操作を勝手に進めず、止まるべき時に止まる。
 
 ### 通過条件
-- [ ] Auto Allow / Approval Required / Deny by Default の3分類がある
-- [ ] 承認待ち状態を保存できる
-- [ ] 承認なしで危険操作を実行しない
-- [ ] retry 上限を超えたら停止する
-- [ ] 停止理由を report に残せる
+- [x] Auto Allow / Approval Required / Deny by Default の3分類がある
+- [x] 承認待ち状態を保存できる
+- [x] 承認なしで危険操作を実行しない
+- [x] retry 上限を超えたら停止する
+- [x] 停止理由を report に残せる
 
 ### 成果物
-- `approval_policy.py`
-- `danger_classifier.py`
-- `stop_conditions.py`
-- `approval_request.py`
+- `apps/takumi-core/policy/approval_policy.py` ✅
+- `apps/takumi-core/policy/danger_classifier.py` ✅
+- `apps/takumi-core/orchestration/stop_conditions.py` ✅
+- `packages/schemas/approval_request.py` ✅
+- `apps/takumi-core/state/approval_store.py` ✅
+- `runtime/approvals/` ✅
 
 ### Git tag
-- `cp-02-safety-gates`
+- `cp-02-safety-gates` ✅
 
 ---
 
