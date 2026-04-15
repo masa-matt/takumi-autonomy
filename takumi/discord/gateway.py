@@ -46,7 +46,7 @@ bot = commands.Bot(
     intents=intents,
 )
 
-_thread_pool = ThreadPoolExecutor(max_workers=4)
+_thread_thread_pool = ThreadPoolExecutor(max_workers=4)
 
 # BLOCKED ジョブを Discord メッセージと紐づけておく辞書
 # {job_id: asyncio.Future}  — Future が resolve されると承認/却下が伝わる
@@ -167,7 +167,7 @@ async def _run_job(
     pending_files = _pending_inbox_files.pop(channel_id, [])
 
     job: Job = await loop.run_in_executor(
-        _thread_pool,
+        _thread_thread_pool,
         lambda: run_job(description, on_status=on_status, inbox_files=pending_files or None),
     )
 
@@ -182,7 +182,7 @@ async def _run_job(
                 _pending_approvals.pop(job.job_id, None)
 
             job = await loop.run_in_executor(
-                _thread_pool,
+                _thread_thread_pool,
                 lambda: resume_job(job, approved=approved, on_status=on_status),
             )
 
@@ -405,7 +405,7 @@ async def _ensure_claude_auth() -> None:
     loop = asyncio.get_event_loop()
 
     # pexpect は同期 API — ThreadPoolExecutor で実行
-    url, child = await loop.run_in_executor(_pool, _pexpect_launch_auth)
+    url, child = await loop.run_in_executor(_thread_pool, _pexpect_launch_auth)
 
     if url == "already":
         log.info("Claude Code: 認証済み")
@@ -450,7 +450,7 @@ async def _ensure_claude_auth() -> None:
 
     if not code:
         if child:
-            await loop.run_in_executor(_pool, lambda: child.close(force=True))
+            await loop.run_in_executor(_thread_pool, lambda: child.close(force=True))
         log.warning("Claude Code: 認証コードが届かずタイムアウト")
         if channel:
             await channel.send(
@@ -464,7 +464,7 @@ async def _ensure_claude_auth() -> None:
         await channel.send("🔄 Authentication Code を受け取りました。認証中です（最大60秒）...")
     log.info("認証コードを受け取りました。pexpect 経由で送信します。")
 
-    await loop.run_in_executor(_pool, lambda: _pexpect_send_code(child, code))
+    await loop.run_in_executor(_thread_pool, lambda: _pexpect_send_code(child, code))
 
     # 動作確認
     log.info("Claude Code の動作を確認中…")
