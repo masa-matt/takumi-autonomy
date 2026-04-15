@@ -385,6 +385,16 @@ async def _ensure_claude_auth() -> None:
             )
         return
 
+    # プロセスがまだ生きているか確認
+    if proc.returncode is not None:
+        log.warning("claude auth login プロセスが既に終了 (returncode=%d)。コード送信前にタイムアウトした可能性あり。", proc.returncode)
+        if channel:
+            await channel.send(
+                "⚠️ 認証プロセスが既に終了していました。\n"
+                "`docker compose restart` して再試行してください。"
+            )
+        return
+
     # stdin にコードを送信
     try:
         proc.stdin.write((code + "\n").encode())
@@ -396,20 +406,68 @@ async def _ensure_claude_auth() -> None:
         proc.kill()
         return
 
-    # 認証完了を待機
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=30)
+    # stdout を読んで成功/失敗を検出（最大120秒）
+    success = False
+    _SUCCESS_KWS = ["logged in", "authenticated", "success", "✓", "complete"]
+    _FAIL_KWS = ["error", "invalid", "failed", "expired"]
+    deadline = asyncio.get_event_loop().time() + 120
+    while asyncio.get_event_loop().time() < deadline:
+        remaining = deadline - asyncio.get_event_loop().time()
+        try:
+            line_bytes = await asyncio.wait_for(
+                proc.stdout.readline(), timeout=max(remaining, 0.5)
+            )
+        except asyncio.TimeoutError:
+            break
+        if not line_bytes:
+            break
+        line = line_bytes.decode().strip()
+        if line:
+            log.info("claude auth: %s", line)
+        if any(kw in line.lower() for kw in _SUCCESS_KWS):
+            success = True
+            break
+        if any(kw in line.lower() for kw in _FAIL_KWS):
+            log.warning("claude auth: 失敗メッセージを検出: %s", line)
+            break
+
+    # プロセスを終了（まだ生きていれば）
+    if proc.returncode is None:
+        proc.kill()
+        await proc.wait()
+
+    if success:
         log.info("Claude Code: 認証完了")
         if channel:
             await channel.send("✅ Claude Code の認証が完了しました。タスクを受け付けられます。")
-    except asyncio.TimeoutError:
-        proc.kill()
-        log.warning("Claude Code: 認証完了確認タイムアウト")
-        if channel:
-            await channel.send(
-                "⚠️ 認証完了の確認がタイムアウトしました。\n"
-                "`docker compose restart` して認証状態を確認してください。"
+    else:
+        # stdout から判定できなくても認証が通っている可能性があるので動作確認する
+        log.info("Claude Code: 認証結果が stdout から判定できず。動作確認中…")
+        try:
+            test_proc = await asyncio.create_subprocess_exec(
+                "claude", "--print", "respond with just: ok",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            _, _ = await asyncio.wait_for(test_proc.communicate(), timeout=30)
+            if test_proc.returncode == 0:
+                log.info("Claude Code: 動作確認OK → 認証済み")
+                if channel:
+                    await channel.send("✅ Claude Code の認証が完了しました。タスクを受け付けられます。")
+            else:
+                log.warning("Claude Code: 動作確認NG (returncode=%d)", test_proc.returncode)
+                if channel:
+                    await channel.send(
+                        "⚠️ 認証が完了しなかった可能性があります。\n"
+                        "`docker compose restart` して再試行してください。"
+                    )
+        except asyncio.TimeoutError:
+            log.warning("Claude Code: 動作確認タイムアウト")
+            if channel:
+                await channel.send(
+                    "⚠️ 認証状態を確認できませんでした。\n"
+                    "少し待ってから `/task こんにちは` を試してみてください。"
+                )
 
 
 # ── イベント ──────────────────────────────────────────────────────────────────
