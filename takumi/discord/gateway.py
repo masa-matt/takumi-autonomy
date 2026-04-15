@@ -46,7 +46,7 @@ bot = commands.Bot(
     intents=intents,
 )
 
-_thread_thread_pool = ThreadPoolExecutor(max_workers=4)
+_thread_pool = ThreadPoolExecutor(max_workers=4)
 
 # BLOCKED ジョブを Discord メッセージと紐づけておく辞書
 # {job_id: asyncio.Future}  — Future が resolve されると承認/却下が伝わる
@@ -167,7 +167,7 @@ async def _run_job(
     pending_files = _pending_inbox_files.pop(channel_id, [])
 
     job: Job = await loop.run_in_executor(
-        _thread_thread_pool,
+        _thread_pool,
         lambda: run_job(description, on_status=on_status, inbox_files=pending_files or None),
     )
 
@@ -182,7 +182,7 @@ async def _run_job(
                 _pending_approvals.pop(job.job_id, None)
 
             job = await loop.run_in_executor(
-                _thread_thread_pool,
+                _thread_pool,
                 lambda: resume_job(job, approved=approved, on_status=on_status),
             )
 
