@@ -276,9 +276,11 @@ async def _wait_for_auth_code_file(timeout_sec: int = 600) -> str | None:
         if auth_file.exists():
             try:
                 code = auth_file.read_text(encoding="utf-8").strip()
+                if not code:
+                    continue  # 空ファイルはスキップ（ユーザーがまだ書いていない）
                 auth_file.unlink()
                 log.info("auth_code ファイルを読み込みました（削除済み）")
-                return code if code else None
+                return code
             except Exception as exc:
                 log.warning("auth_code ファイル読み込みエラー: %s", exc)
     return None
