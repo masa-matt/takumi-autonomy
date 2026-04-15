@@ -265,12 +265,34 @@ async def _find_auth_channel() -> discord.abc.Messageable | None:
     return None
 
 
-async def _ensure_claude_auth() -> None:
-    """claude-code executor の認証を確認し、未認証なら Discord 経由で認証を要求する。
+async def _wait_for_auth_code_file(timeout_sec: int = 600) -> str | None:
+    """inbox/.auth_code が作成されるまでポーリングして内容を返す。
 
-    claude auth login を起動して最初の出力を観察する:
-    - URL が出たら未認証 → Discord に送信してユーザーの認証完了を待つ
-    - 5 秒以内に URL が出なければ認証済みとみなす
+    ファイルを読んだら即削除する（コードを Discord チャットに流さないため）。
+    """
+    auth_file = INBOX_DIR / ".auth_code"
+    for _ in range(timeout_sec // 5):
+        await asyncio.sleep(5)
+        if auth_file.exists():
+            try:
+                code = auth_file.read_text(encoding="utf-8").strip()
+                auth_file.unlink()
+                log.info("auth_code ファイルを読み込みました（削除済み）")
+                return code if code else None
+            except Exception as exc:
+                log.warning("auth_code ファイル読み込みエラー: %s", exc)
+    return None
+
+
+async def _ensure_claude_auth() -> None:
+    """claude-code executor の認証を確認し、未認証なら Discord + ローカルファイル経由で認証を要求する。
+
+    フロー:
+    1. claude auth login を起動
+    2. 出力から URL を取得 → Discord に送信
+    3. ユーザーがブラウザで認証 → Authentication Code を inbox/.auth_code に書く
+    4. Bot がファイルを検知 → stdin に送信
+    5. 認証完了
     """
     if os.environ.get("TAKUMI_EXECUTOR", "").lower() != "claude-code":
         return
@@ -279,6 +301,7 @@ async def _ensure_claude_auth() -> None:
 
     proc = await asyncio.create_subprocess_exec(
         "claude", "auth", "login",
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={**os.environ, "DISPLAY": ""},
@@ -302,7 +325,6 @@ async def _ensure_claude_auth() -> None:
         log.debug("claude auth: %s", line)
 
         if "already" in line.lower():
-            # "Already logged in" 等
             proc.kill()
             log.info("Claude Code: 認証済み")
             return
@@ -313,38 +335,68 @@ async def _ensure_claude_auth() -> None:
             break
 
     if not url:
-        # URL が出なかった = 認証済み or claude なし
         proc.kill()
         log.info("Claude Code: 認証済みとみなして続行")
         return
 
-    # 未認証 → Discord に認証URLを送信
-    log.info("Claude Code: 未認証。Discord に認証URLを送信します。")
+    # 未認証 → Discord に手順を送信
+    log.info("Claude Code: 未認証。Discord に認証手順を送信します。")
     channel = await _find_auth_channel()
+
+    inbox_path = INBOX_DIR / ".auth_code"
+    host_inbox = "./inbox/.auth_code"  # ホスト側パス（Mac からの操作用）
 
     if channel:
         await channel.send(
             "🔐 **Claude Code の認証が必要です**\n\n"
-            "以下のURLをブラウザで開いてログインしてください:\n"
+            "**Step 1.** 以下のURLをブラウザで開いてログインしてください:\n"
             f"<{url}>\n\n"
-            "認証が完了すると Takumi が自動的にタスクを受け付けられるようになります。"
+            "**Step 2.** 認証後に表示される `Authentication Code` を以下のファイルに書き込んでください:\n"
+            f"```\necho 'YOUR_CODE_HERE' > {host_inbox}\n```\n"
+            "コードはファイル経由で受け取ります（チャットには貼らないでください）。"
         )
-        log.info("Discord に認証URLを送信しました。ユーザーの認証を待機中…")
+        log.info("Discord に認証手順を送信しました。ファイル待機中: %s", inbox_path)
     else:
-        log.warning("送信先チャンネルが見つかりません。ログの URL を使って認証してください: %s", url)
+        log.warning("チャンネルが見つかりません。認証URL: %s", url)
+        log.warning("認証後のコードを %s に書き込んでください。", inbox_path)
 
-    # 認証完了を待機（プロセスが終了するまで、最大 10 分）
+    # ファイルからコードを待つ（最大 10 分）
+    code = await _wait_for_auth_code_file(timeout_sec=600)
+
+    if not code:
+        proc.kill()
+        log.warning("Claude Code: 認証コードが届かずタイムアウト")
+        if channel:
+            await channel.send(
+                "⚠️ 認証がタイムアウトしました（10分）。\n"
+                "`docker compose restart` して再試行してください。"
+            )
+        return
+
+    # stdin にコードを送信
     try:
-        await asyncio.wait_for(proc.wait(), timeout=600)
+        proc.stdin.write((code + "\n").encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+        log.info("認証コードを送信しました。完了を待機中…")
+    except Exception as exc:
+        log.error("stdin 送信エラー: %s", exc)
+        proc.kill()
+        return
+
+    # 認証完了を待機
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=30)
         log.info("Claude Code: 認証完了")
         if channel:
             await channel.send("✅ Claude Code の認証が完了しました。タスクを受け付けられます。")
     except asyncio.TimeoutError:
         proc.kill()
-        log.warning("Claude Code: 認証タイムアウト（10分）")
+        log.warning("Claude Code: 認証完了確認タイムアウト")
         if channel:
             await channel.send(
-                "⚠️ 認証がタイムアウトしました。`docker compose restart` して再試行してください。"
+                "⚠️ 認証完了の確認がタイムアウトしました。\n"
+                "`docker compose restart` して認証状態を確認してください。"
             )
 
 
