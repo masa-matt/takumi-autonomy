@@ -21,13 +21,13 @@ services:
       # 初回起動時に Bot が Discord へ認証URLを送信するので、そこから認証する
       - claude_auth:/root/.claude
 
-volumes:
-  claude_auth:
-    # Docker が管理する named volume（コンテナ再起動後も認証状態が保持される）
-
     # ログをローテーションする
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "5"
+
+volumes:
+  claude_auth:
+    # Docker が管理する named volume（コンテナ再起動後も認証状態が保持される）
