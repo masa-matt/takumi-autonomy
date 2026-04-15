@@ -17,7 +17,9 @@
 import asyncio
 import logging
 import os
+import pathlib
 import re
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 
 import discord
@@ -287,6 +289,34 @@ async def _wait_for_auth_code_file(timeout_sec: int = 300) -> str | None:
     return None
 
 
+def _restore_claude_config_if_needed() -> None:
+    """/root/.claude.json が欠けていればバックアップから復元する。
+
+    Docker volume は /root/.claude/（ディレクトリ）を永続化しているが、
+    /root/.claude.json（ファイル）は volume 外のためコンテナ再起動で消える。
+    /root/.claude/backups/ に残っている最新バックアップで補完する。
+    """
+    config = pathlib.Path("/root/.claude.json")
+    if config.exists():
+        return
+
+    backup_dir = pathlib.Path("/root/.claude/backups")
+    if not backup_dir.exists():
+        return
+
+    backups = sorted(backup_dir.glob(".claude.json.backup.*"))
+    if not backups:
+        log.info("claude config なし、バックアップも見つからず")
+        return
+
+    latest = backups[-1]
+    try:
+        shutil.copy2(latest, config)
+        log.info("claude config をバックアップから復元しました: %s → %s", latest, config)
+    except Exception as exc:
+        log.warning("claude config 復元失敗: %s", exc)
+
+
 async def _ensure_claude_auth() -> None:
     """claude-code executor の認証を確認し、未認証なら Discord + ローカルファイル経由で認証を要求する。
 
@@ -299,6 +329,9 @@ async def _ensure_claude_auth() -> None:
     """
     if os.environ.get("TAKUMI_EXECUTOR", "").lower() != "claude-code":
         return
+
+    # コンテナ再起動で /root/.claude.json が消えている場合にバックアップから復元
+    _restore_claude_config_if_needed()
 
     log.info("Claude Code executor: 認証状態を確認中…")
 
