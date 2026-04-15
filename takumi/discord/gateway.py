@@ -17,6 +17,7 @@
 import asyncio
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 import discord
@@ -233,22 +234,139 @@ def _handle_files_reserve(channel_id: int, filename: str) -> str:
     )
 
 
+# ── Claude Code 認証フロー ──────────────────────────────────────────────────────
+
+async def _find_auth_channel() -> discord.abc.Messageable | None:
+    """認証メッセージを送るチャンネルを決める。
+
+    優先順位:
+    1. DISCORD_AUTH_CHANNEL_ID 環境変数
+    2. DISCORD_GUILD_ID のサーバー内の最初の書き込み可能テキストチャンネル
+    3. ボットオーナーへの DM
+    """
+    channel_id = os.environ.get("DISCORD_AUTH_CHANNEL_ID")
+    if channel_id:
+        ch = bot.get_channel(int(channel_id))
+        if ch:
+            return ch
+
+    guild_id = os.environ.get("DISCORD_GUILD_ID")
+    if guild_id:
+        guild = bot.get_guild(int(guild_id))
+        if guild:
+            for ch in guild.text_channels:
+                if ch.permissions_for(guild.me).send_messages:
+                    return ch
+
+    app_info = await bot.application_info()
+    if app_info.owner:
+        return await app_info.owner.create_dm()
+
+    return None
+
+
+async def _ensure_claude_auth() -> None:
+    """claude-code executor の認証を確認し、未認証なら Discord 経由で認証を要求する。
+
+    claude auth login を起動して最初の出力を観察する:
+    - URL が出たら未認証 → Discord に送信してユーザーの認証完了を待つ
+    - 5 秒以内に URL が出なければ認証済みとみなす
+    """
+    if os.environ.get("TAKUMI_EXECUTOR", "").lower() != "claude-code":
+        return
+
+    log.info("Claude Code executor: 認証状態を確認中…")
+
+    proc = await asyncio.create_subprocess_exec(
+        "claude", "auth", "login",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "DISPLAY": ""},
+    )
+
+    # 最初の数秒で URL が出るかどうかを見る
+    url: str | None = None
+    deadline = asyncio.get_event_loop().time() + 6
+
+    while asyncio.get_event_loop().time() < deadline:
+        remaining = deadline - asyncio.get_event_loop().time()
+        try:
+            line_bytes = await asyncio.wait_for(
+                proc.stdout.readline(), timeout=max(remaining, 0.5)
+            )
+        except asyncio.TimeoutError:
+            break
+        if not line_bytes:
+            break
+        line = line_bytes.decode().strip()
+        log.debug("claude auth: %s", line)
+
+        if "already" in line.lower():
+            # "Already logged in" 等
+            proc.kill()
+            log.info("Claude Code: 認証済み")
+            return
+
+        match = re.search(r'https://\S+', line)
+        if match:
+            url = match.group(0)
+            break
+
+    if not url:
+        # URL が出なかった = 認証済み or claude なし
+        proc.kill()
+        log.info("Claude Code: 認証済みとみなして続行")
+        return
+
+    # 未認証 → Discord に認証URLを送信
+    log.info("Claude Code: 未認証。Discord に認証URLを送信します。")
+    channel = await _find_auth_channel()
+
+    if channel:
+        await channel.send(
+            "🔐 **Claude Code の認証が必要です**\n\n"
+            "以下のURLをブラウザで開いてログインしてください:\n"
+            f"<{url}>\n\n"
+            "認証が完了すると Takumi が自動的にタスクを受け付けられるようになります。"
+        )
+        log.info("Discord に認証URLを送信しました。ユーザーの認証を待機中…")
+    else:
+        log.warning("送信先チャンネルが見つかりません。ログの URL を使って認証してください: %s", url)
+
+    # 認証完了を待機（プロセスが終了するまで、最大 10 分）
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=600)
+        log.info("Claude Code: 認証完了")
+        if channel:
+            await channel.send("✅ Claude Code の認証が完了しました。タスクを受け付けられます。")
+    except asyncio.TimeoutError:
+        proc.kill()
+        log.warning("Claude Code: 認証タイムアウト（10分）")
+        if channel:
+            await channel.send(
+                "⚠️ 認証がタイムアウトしました。`docker compose restart` して再試行してください。"
+            )
+
+
 # ── イベント ──────────────────────────────────────────────────────────────────
 
 @bot.event
 async def on_ready():
+    # スラッシュコマンド sync
     guild_id = os.environ.get("DISCORD_GUILD_ID")
     if guild_id:
-        # ギルド限定 sync（即時反映 — 開発・ローカル運用向け）
         guild = discord.Object(id=int(guild_id))
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
         log.info("Slash commands synced to guild %s (instant).", guild_id)
     else:
-        # グローバル sync（全サーバー対象、反映に最大1時間）
         await bot.tree.sync()
         log.info("Slash commands synced globally (may take up to 1 hour).")
+
     log.info("Takumi V2 Bot ready: %s (id=%s)", bot.user, bot.user.id)
+
+    # Claude Code 認証確認（claude-code モード時のみ）
+    await _ensure_claude_auth()
 
 
 @bot.event

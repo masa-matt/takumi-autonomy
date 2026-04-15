@@ -17,10 +17,13 @@ services:
       - ./takumi/jobs:/app/takumi/jobs
       # inbox: ユーザーがファイルを置く場所（read-only）
       - ./inbox:/app/inbox:ro
-      # Claude Code 認証情報（TAKUMI_EXECUTOR=claude-code 使用時に必要）
-      # claude auth login 済みのホストの認証情報をコンテナに渡す
-      # :ro を外しているのは Claude Code がトークン更新時に書き込むため
-      - ~/.claude:/root/.claude
+      # Claude Code 認証情報を named volume で永続化
+      # 初回起動時に Bot が Discord へ認証URLを送信するので、そこから認証する
+      - claude_auth:/root/.claude
+
+volumes:
+  claude_auth:
+    # Docker が管理する named volume（コンテナ再起動後も認証状態が保持される）
 
     # ログをローテーションする
     logging:
