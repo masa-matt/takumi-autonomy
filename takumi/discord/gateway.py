@@ -18,8 +18,8 @@ import asyncio
 import logging
 import os
 import pathlib
-import re
 import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 import discord
@@ -238,57 +238,6 @@ def _handle_files_reserve(channel_id: int, filename: str) -> str:
 
 # ── Claude Code 認証フロー ──────────────────────────────────────────────────────
 
-async def _find_auth_channel() -> discord.abc.Messageable | None:
-    """認証メッセージを送るチャンネルを決める。
-
-    優先順位:
-    1. DISCORD_AUTH_CHANNEL_ID 環境変数
-    2. DISCORD_GUILD_ID のサーバー内の最初の書き込み可能テキストチャンネル
-    3. ボットオーナーへの DM
-    """
-    channel_id = os.environ.get("DISCORD_AUTH_CHANNEL_ID")
-    if channel_id:
-        ch = bot.get_channel(int(channel_id))
-        if ch:
-            return ch
-
-    guild_id = os.environ.get("DISCORD_GUILD_ID")
-    if guild_id:
-        guild = bot.get_guild(int(guild_id))
-        if guild:
-            for ch in guild.text_channels:
-                if ch.permissions_for(guild.me).send_messages:
-                    return ch
-
-    app_info = await bot.application_info()
-    if app_info.owner:
-        return await app_info.owner.create_dm()
-
-    return None
-
-
-async def _wait_for_auth_code_file(timeout_sec: int = 300) -> str | None:
-    """inbox/.auth_code が作成されるまでポーリングして内容を返す。
-
-    ファイルを読んだら即削除する（コードを Discord チャットに流さないため）。
-    デフォルトは5分待機。
-    """
-    auth_file = INBOX_DIR / ".auth_code"
-    for _ in range(timeout_sec // 10):
-        await asyncio.sleep(10)
-        if auth_file.exists():
-            try:
-                code = auth_file.read_text(encoding="utf-8").strip()
-                if not code:
-                    continue  # 空ファイルはスキップ（ユーザーがまだ書いていない）
-                auth_file.unlink()
-                log.info("auth_code ファイルを読み込みました（削除済み）")
-                return code
-            except Exception as exc:
-                log.warning("auth_code ファイル読み込みエラー: %s", exc)
-    return None
-
-
 def _restore_claude_config_if_needed() -> None:
     """/root/.claude.json が欠けていればバックアップから復元する。
 
@@ -317,82 +266,12 @@ def _restore_claude_config_if_needed() -> None:
         log.warning("claude config 復元失敗: %s", exc)
 
 
-def _pexpect_launch_auth() -> tuple[str | None, object | None]:
-    """pexpect で claude auth login を PTY 越しに起動し、URL を取得して返す。
-
-    Returns:
-        (url, child) — URL が取れた場合は child プロセスを保持して返す
-        ("already", None) — 認証済みの場合
-        (None, None) — URL が取れなかった場合（認証済みとみなす）
-    """
-    import pexpect  # type: ignore
-
-    env = {**os.environ, "DISPLAY": ""}
-    child = pexpect.spawn("claude auth login", env=env, timeout=10, encoding="utf-8")
-
-    try:
-        i = child.expect([r"https://\S+", r"already", pexpect.EOF, pexpect.TIMEOUT])
-    except Exception as exc:
-        log.warning("pexpect expect 失敗: %s", exc)
-        try:
-            child.close(force=True)
-        except Exception:
-            pass
-        return None, None
-
-    if i == 1:
-        # "already logged in" — 認証済み
-        try:
-            child.close(force=True)
-        except Exception:
-            pass
-        return "already", None
-
-    if i in (2, 3):
-        # EOF or TIMEOUT — URL が取れなかった（認証済み or 接続不可）
-        try:
-            child.close(force=True)
-        except Exception:
-            pass
-        return None, None
-
-    # i == 0 — URL 行にマッチした
-    matched_text = (child.before or "") + (child.after or "")
-    m = re.search(r"https://\S+", matched_text)
-    url = m.group(0) if m else None
-    return url, child
-
-
-def _pexpect_send_code(child: object, code: str) -> bool:
-    """pexpect child にコードを送信してトークン交換を待つ。
-
-    Returns: True = 成功 / False = 失敗
-    """
-    import pexpect  # type: ignore
-
-    try:
-        child.sendline(code)
-        # 完了 or EOF まで最大60秒待つ
-        child.expect([pexpect.EOF, pexpect.TIMEOUT], timeout=60)
-    except Exception as exc:
-        log.warning("pexpect コード送信/待機エラー: %s", exc)
-    finally:
-        try:
-            child.close(force=True)
-        except Exception:
-            pass
-    return True
-
-
 async def _ensure_claude_auth() -> None:
-    """claude-code executor の認証を確認し、未認証なら Discord + ローカルファイル経由で認証を要求する。
+    """claude-code executor の認証状態を確認し、未認証なら手動認証手順を Discord に送信する。
 
-    フロー:
-    1. pexpect（PTY）で claude auth login を起動し URL を取得
-    2. Discord に URL と手順を送信
-    3. ユーザーがブラウザで認証 → Authentication Code を inbox/.auth_code に書く
-    4. Bot がファイルを検知 → pexpect 経由で claude auth login にコードを送信
-    5. トークン交換完了 → claude --print で動作確認
+    認証は `docker exec -it takumi-bot claude auth login` で一度だけ行う。
+    認証情報は Docker volume（claude_auth:/root/.claude）に永続化されるため、
+    コンテナ再起動後も再認証は不要。
     """
     if os.environ.get("TAKUMI_EXECUTOR", "").lower() != "claude-code":
         return
@@ -402,97 +281,50 @@ async def _ensure_claude_auth() -> None:
 
     log.info("Claude Code executor: 認証状態を確認中…")
 
-    loop = asyncio.get_event_loop()
-
-    # pexpect は同期 API — ThreadPoolExecutor で実行
-    url, child = await loop.run_in_executor(_thread_pool, _pexpect_launch_auth)
-
-    if url == "already":
+    result = subprocess.run(
+        ["claude", "auth", "status", "--json"],
+        capture_output=True, text=True,
+    )
+    if '"loggedIn": true' in result.stdout:
         log.info("Claude Code: 認証済み")
         return
 
-    if not url:
-        log.info("Claude Code: 認証済みとみなして続行")
-        return
+    # 未認証 → Discord に手順を通知（Bot はここで待機しない）
+    log.warning("Claude Code: 未認証。Discord に手動認証手順を送信します。")
 
-    # 未認証 → Discord に手順を送信
-    log.info("Claude Code: 未認証。Discord に認証手順を送信します。")
-    channel = await _find_auth_channel()
-
-    inbox_path = INBOX_DIR / ".auth_code"
-    host_inbox = "./inbox/.auth_code"
-
-    # 空ファイルを作成しておく（ユーザーが開いて貼り付けるだけでいいように）
-    try:
-        INBOX_DIR.mkdir(parents=True, exist_ok=True)
-        if not inbox_path.exists():
-            inbox_path.touch()
-            log.info("空の auth_code ファイルを作成しました: %s", inbox_path)
-    except Exception as exc:
-        log.warning("auth_code ファイルの作成に失敗: %s", exc)
-
-    if channel:
-        await channel.send(
-            "🔐 **Claude Code の認証が必要です**\n\n"
-            "**Step 1.** 以下のURLをブラウザで開いてログインしてください:\n"
-            f"<{url}>\n\n"
-            "**Step 2.** 認証後に表示される `Authentication Code` を以下のファイルに貼り付けて保存してください:\n"
-            f"`{host_inbox}`\n\n"
-            "（ファイルはすでに作成済みです。開いて貼り付けるだけでOKです）"
-        )
-        log.info("Discord に認証手順を送信しました。ファイル待機中: %s", inbox_path)
-    else:
-        log.warning("チャンネルが見つかりません。認証URL: %s", url)
-        log.warning("認証後のコードを %s に書き込んでください。", inbox_path)
-
-    # ファイルからコードを待つ（最大5分）
-    code = await _wait_for_auth_code_file(timeout_sec=300)
-
-    if not code:
-        if child:
-            await loop.run_in_executor(_thread_pool, lambda: child.close(force=True))
-        log.warning("Claude Code: 認証コードが届かずタイムアウト")
-        if channel:
-            await channel.send(
-                "⚠️ 認証がタイムアウトしました（5分）。\n"
-                "`docker compose restart` して再試行してください。"
-            )
-        return
-
-    # コードを受け取った → Discord に通知して pexpect 経由で送信
-    if channel:
-        await channel.send("🔄 Authentication Code を受け取りました。認証中です（最大60秒）...")
-    log.info("認証コードを受け取りました。pexpect 経由で送信します。")
-
-    await loop.run_in_executor(_thread_pool, lambda: _pexpect_send_code(child, code))
-
-    # 動作確認
-    log.info("Claude Code の動作を確認中…")
-    try:
-        test_proc = await asyncio.create_subprocess_exec(
-            "claude", "--print", "respond with just: ok",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, _ = await asyncio.wait_for(test_proc.communicate(), timeout=60)
-        if test_proc.returncode == 0:
-            log.info("Claude Code: 認証OK")
-            if channel:
-                await channel.send("✅ Claude Code の認証が完了しました！タスクを受け付けられます。")
-        else:
-            log.warning("Claude Code: 動作確認NG (returncode=%d)", test_proc.returncode)
-            if channel:
-                await channel.send(
-                    "⚠️ 認証が正常に完了しなかった可能性があります。\n"
-                    "`docker compose restart` して再試行してください。"
+    channel_id = os.environ.get("DISCORD_AUTH_CHANNEL_ID")
+    channel = bot.get_channel(int(channel_id)) if channel_id else None
+    if channel is None:
+        guild_id = os.environ.get("DISCORD_GUILD_ID")
+        if guild_id:
+            guild = bot.get_guild(int(guild_id))
+            if guild:
+                channel = next(
+                    (ch for ch in guild.text_channels
+                     if ch.permissions_for(guild.me).send_messages),
+                    None,
                 )
-    except asyncio.TimeoutError:
-        log.warning("Claude Code: 動作確認タイムアウト")
-        if channel:
-            await channel.send(
-                "⏳ 認証状態の確認がタイムアウトしました。\n"
-                "少し待ってから `/task こんにちは` を試してみてください。"
-            )
+    if channel is None:
+        try:
+            app_info = await bot.application_info()
+            if app_info.owner:
+                channel = await app_info.owner.create_dm()
+        except Exception:
+            pass
+
+    msg = (
+        "🔐 **Claude Code の認証が必要です**\n\n"
+        "以下のコマンドをターミナルで実行してください:\n"
+        "```\ndocker exec -it takumi-bot claude auth login\n```\n"
+        "ブラウザで認証後、コードをターミナルに貼り付けると完了します。\n\n"
+        "認証完了後、bot を再起動してください:\n"
+        "```\ndocker compose restart\n```"
+    )
+    if channel:
+        await channel.send(msg)
+        log.info("Discord に認証手順を送信しました。")
+    else:
+        log.warning("Discord チャンネルが見つかりません。手動で認証してください:\n%s", msg)
 
 
 # ── イベント ──────────────────────────────────────────────────────────────────
