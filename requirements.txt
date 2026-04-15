@@ -13,4 +13,7 @@ discord.py>=2.3.2
 # Anthropic API (AgentSdkExecutor)
 anthropic>=0.25.0
 
+# TTY 越しに CLI プロセスと対話する（claude auth login の認証コード入力に使用）
+pexpect>=4.9.0
+
 # (claude-code executor は claude CLI を別途インストールすること)

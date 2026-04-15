@@ -317,15 +317,82 @@ def _restore_claude_config_if_needed() -> None:
         log.warning("claude config 復元失敗: %s", exc)
 
 
+def _pexpect_launch_auth() -> tuple[str | None, object | None]:
+    """pexpect で claude auth login を PTY 越しに起動し、URL を取得して返す。
+
+    Returns:
+        (url, child) — URL が取れた場合は child プロセスを保持して返す
+        ("already", None) — 認証済みの場合
+        (None, None) — URL が取れなかった場合（認証済みとみなす）
+    """
+    import pexpect  # type: ignore
+
+    env = {**os.environ, "DISPLAY": ""}
+    child = pexpect.spawn("claude auth login", env=env, timeout=10, encoding="utf-8")
+
+    try:
+        i = child.expect([r"https://\S+", r"already", pexpect.EOF, pexpect.TIMEOUT])
+    except Exception as exc:
+        log.warning("pexpect expect 失敗: %s", exc)
+        try:
+            child.close(force=True)
+        except Exception:
+            pass
+        return None, None
+
+    if i == 1:
+        # "already logged in" — 認証済み
+        try:
+            child.close(force=True)
+        except Exception:
+            pass
+        return "already", None
+
+    if i in (2, 3):
+        # EOF or TIMEOUT — URL が取れなかった（認証済み or 接続不可）
+        try:
+            child.close(force=True)
+        except Exception:
+            pass
+        return None, None
+
+    # i == 0 — URL 行にマッチした
+    matched_text = (child.before or "") + (child.after or "")
+    m = re.search(r"https://\S+", matched_text)
+    url = m.group(0) if m else None
+    return url, child
+
+
+def _pexpect_send_code(child: object, code: str) -> bool:
+    """pexpect child にコードを送信してトークン交換を待つ。
+
+    Returns: True = 成功 / False = 失敗
+    """
+    import pexpect  # type: ignore
+
+    try:
+        child.sendline(code)
+        # 完了 or EOF まで最大60秒待つ
+        child.expect([pexpect.EOF, pexpect.TIMEOUT], timeout=60)
+    except Exception as exc:
+        log.warning("pexpect コード送信/待機エラー: %s", exc)
+    finally:
+        try:
+            child.close(force=True)
+        except Exception:
+            pass
+    return True
+
+
 async def _ensure_claude_auth() -> None:
     """claude-code executor の認証を確認し、未認証なら Discord + ローカルファイル経由で認証を要求する。
 
     フロー:
-    1. claude auth login を起動
-    2. 出力から URL を取得 → Discord に送信
+    1. pexpect（PTY）で claude auth login を起動し URL を取得
+    2. Discord に URL と手順を送信
     3. ユーザーがブラウザで認証 → Authentication Code を inbox/.auth_code に書く
-    4. Bot がファイルを検知 → stdin に送信
-    5. 認証完了
+    4. Bot がファイルを検知 → pexpect 経由で claude auth login にコードを送信
+    5. トークン交換完了 → claude --print で動作確認
     """
     if os.environ.get("TAKUMI_EXECUTOR", "").lower() != "claude-code":
         return
@@ -335,43 +402,16 @@ async def _ensure_claude_auth() -> None:
 
     log.info("Claude Code executor: 認証状態を確認中…")
 
-    proc = await asyncio.create_subprocess_exec(
-        "claude", "auth", "login",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "DISPLAY": ""},
-    )
+    loop = asyncio.get_event_loop()
 
-    # 最初の数秒で URL が出るかどうかを見る
-    url: str | None = None
-    deadline = asyncio.get_event_loop().time() + 6
+    # pexpect は同期 API — ThreadPoolExecutor で実行
+    url, child = await loop.run_in_executor(_pool, _pexpect_launch_auth)
 
-    while asyncio.get_event_loop().time() < deadline:
-        remaining = deadline - asyncio.get_event_loop().time()
-        try:
-            line_bytes = await asyncio.wait_for(
-                proc.stdout.readline(), timeout=max(remaining, 0.5)
-            )
-        except asyncio.TimeoutError:
-            break
-        if not line_bytes:
-            break
-        line = line_bytes.decode().strip()
-        log.debug("claude auth: %s", line)
-
-        if "already" in line.lower():
-            proc.kill()
-            log.info("Claude Code: 認証済み")
-            return
-
-        match = re.search(r'https://\S+', line)
-        if match:
-            url = match.group(0)
-            break
+    if url == "already":
+        log.info("Claude Code: 認証済み")
+        return
 
     if not url:
-        proc.kill()
         log.info("Claude Code: 認証済みとみなして続行")
         return
 
@@ -380,7 +420,7 @@ async def _ensure_claude_auth() -> None:
     channel = await _find_auth_channel()
 
     inbox_path = INBOX_DIR / ".auth_code"
-    host_inbox = "./inbox/.auth_code"  # ホスト側パス（Mac からの操作用）
+    host_inbox = "./inbox/.auth_code"
 
     # 空ファイルを作成しておく（ユーザーが開いて貼り付けるだけでいいように）
     try:
@@ -405,52 +445,28 @@ async def _ensure_claude_auth() -> None:
         log.warning("チャンネルが見つかりません。認証URL: %s", url)
         log.warning("認証後のコードを %s に書き込んでください。", inbox_path)
 
-    # ファイルからコードを待つ（最大 10 分）
+    # ファイルからコードを待つ（最大5分）
     code = await _wait_for_auth_code_file(timeout_sec=300)
 
     if not code:
-        proc.kill()
+        if child:
+            await loop.run_in_executor(_pool, lambda: child.close(force=True))
         log.warning("Claude Code: 認証コードが届かずタイムアウト")
         if channel:
             await channel.send(
-                "⚠️ 認証がタイムアウトしました（10分）。\n"
+                "⚠️ 認証がタイムアウトしました（5分）。\n"
                 "`docker compose restart` して再試行してください。"
             )
         return
 
-    # コードを受け取ったことを即座に Discord に通知
+    # コードを受け取った → Discord に通知して pexpect 経由で送信
     if channel:
-        await channel.send("🔄 Authentication Code を受け取りました。認証中です（30秒ほどかかります）...")
-    log.info("認証コードを受け取りました。stdin に送信します。")
+        await channel.send("🔄 Authentication Code を受け取りました。認証中です（最大60秒）...")
+    log.info("認証コードを受け取りました。pexpect 経由で送信します。")
 
-    # プロセスがまだ生きているか確認
-    if proc.returncode is not None:
-        log.warning("claude auth login プロセスが先に終了 (returncode=%d)", proc.returncode)
-        if channel:
-            await channel.send(
-                "⚠️ 認証プロセスが先に終了していました。\n"
-                "`docker compose restart` して再試行してください。"
-            )
-        return
+    await loop.run_in_executor(_pool, lambda: _pexpect_send_code(child, code))
 
-    # stdin にコードを送信してプロセスを閉じる
-    try:
-        proc.stdin.write((code + "\n").encode())
-        await proc.stdin.drain()
-        proc.stdin.close()
-        log.info("stdin にコードを送信。30秒待機してトークン交換を待ちます…")
-    except Exception as exc:
-        log.error("stdin 送信エラー: %s", exc)
-        proc.kill()
-        return
-
-    # トークン交換の完了を30秒待つ（stdout の内容は問わない）
-    await asyncio.sleep(30)
-    if proc.returncode is None:
-        proc.kill()
-        await proc.wait()
-
-    # 実際に claude が動くか確認して結果を Discord に報告
+    # 動作確認
     log.info("Claude Code の動作を確認中…")
     try:
         test_proc = await asyncio.create_subprocess_exec(
