@@ -237,9 +237,18 @@ def _handle_files_reserve(channel_id: int, filename: str) -> str:
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
+    guild_id = os.environ.get("DISCORD_GUILD_ID")
+    if guild_id:
+        # ギルド限定 sync（即時反映 — 開発・ローカル運用向け）
+        guild = discord.Object(id=int(guild_id))
+        bot.tree.copy_global_to(guild=guild)
+        await bot.tree.sync(guild=guild)
+        log.info("Slash commands synced to guild %s (instant).", guild_id)
+    else:
+        # グローバル sync（全サーバー対象、反映に最大1時間）
+        await bot.tree.sync()
+        log.info("Slash commands synced globally (may take up to 1 hour).")
     log.info("Takumi V2 Bot ready: %s (id=%s)", bot.user, bot.user.id)
-    log.info("Slash commands synced.")
 
 
 @bot.event

@@ -7,6 +7,10 @@ services:
 
     env_file:
       - .env
+    # DISCORD_GUILD_ID を設定するとスラッシュコマンドがそのサーバーに即時反映される（推奨）
+    # 未設定の場合はグローバル sync（最大1時間かかる）
+    # environment:
+    #   - DISCORD_GUILD_ID=123456789012345678
 
     volumes:
       # job workspaces を永続化（コンテナ再起動後も job 状態が残る）
