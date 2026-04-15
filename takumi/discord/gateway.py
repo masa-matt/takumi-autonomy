@@ -265,14 +265,15 @@ async def _find_auth_channel() -> discord.abc.Messageable | None:
     return None
 
 
-async def _wait_for_auth_code_file(timeout_sec: int = 600) -> str | None:
+async def _wait_for_auth_code_file(timeout_sec: int = 300) -> str | None:
     """inbox/.auth_code が作成されるまでポーリングして内容を返す。
 
     ファイルを読んだら即削除する（コードを Discord チャットに流さないため）。
+    デフォルトは5分待機。
     """
     auth_file = INBOX_DIR / ".auth_code"
-    for _ in range(timeout_sec // 5):
-        await asyncio.sleep(5)
+    for _ in range(timeout_sec // 10):
+        await asyncio.sleep(10)
         if auth_file.exists():
             try:
                 code = auth_file.read_text(encoding="utf-8").strip()
@@ -372,7 +373,7 @@ async def _ensure_claude_auth() -> None:
         log.warning("認証後のコードを %s に書き込んでください。", inbox_path)
 
     # ファイルからコードを待つ（最大 10 分）
-    code = await _wait_for_auth_code_file(timeout_sec=600)
+    code = await _wait_for_auth_code_file(timeout_sec=300)
 
     if not code:
         proc.kill()
