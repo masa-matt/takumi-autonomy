@@ -19,7 +19,8 @@ services:
       - ./inbox:/app/inbox:ro
       # Claude Code 認証情報（TAKUMI_EXECUTOR=claude-code 使用時に必要）
       # claude auth login 済みのホストの認証情報をコンテナに渡す
-      - ~/.claude:/root/.claude:ro
+      # :ro を外しているのは Claude Code がトークン更新時に書き込むため
+      - ~/.claude:/root/.claude
 
     # ログをローテーションする
     logging:
