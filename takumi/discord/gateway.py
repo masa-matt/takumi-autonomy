@@ -346,14 +346,23 @@ async def _ensure_claude_auth() -> None:
     inbox_path = INBOX_DIR / ".auth_code"
     host_inbox = "./inbox/.auth_code"  # ホスト側パス（Mac からの操作用）
 
+    # 空ファイルを作成しておく（ユーザーが開いて貼り付けるだけでいいように）
+    try:
+        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        if not inbox_path.exists():
+            inbox_path.touch()
+            log.info("空の auth_code ファイルを作成しました: %s", inbox_path)
+    except Exception as exc:
+        log.warning("auth_code ファイルの作成に失敗: %s", exc)
+
     if channel:
         await channel.send(
             "🔐 **Claude Code の認証が必要です**\n\n"
             "**Step 1.** 以下のURLをブラウザで開いてログインしてください:\n"
             f"<{url}>\n\n"
-            "**Step 2.** 認証後に表示される `Authentication Code` を以下のファイルに書き込んでください:\n"
-            f"```\necho 'YOUR_CODE_HERE' > {host_inbox}\n```\n"
-            "コードはファイル経由で受け取ります（チャットには貼らないでください）。"
+            "**Step 2.** 認証後に表示される `Authentication Code` を以下のファイルに貼り付けて保存してください:\n"
+            f"`{host_inbox}`\n\n"
+            "（ファイルはすでに作成済みです。開いて貼り付けるだけでOKです）"
         )
         log.info("Discord に認証手順を送信しました。ファイル待機中: %s", inbox_path)
     else:
