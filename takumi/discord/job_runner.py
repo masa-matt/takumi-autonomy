@@ -92,16 +92,64 @@ def _execute(job: Job) -> str:
         raise RuntimeError(f"API error: {exc}") from exc
 
 
+def _build_workspace_prompt(task: str, workspace) -> str:
+    """workspace context を含むプロンプトを生成する。
+
+    Claude Code が workspace 内に閉じて作業するよう指示する。
+    """
+    input_files = list(workspace.input.iterdir()) if workspace.input.exists() else []
+    input_list = "\n".join(f"    - {f.name}" for f in input_files) or "    （なし）"
+
+    repos = list(workspace.repos.iterdir()) if workspace.repos.exists() else []
+    repos_list = "\n".join(f"    - {r.name}" for r in repos) or "    （なし）"
+
+    return f"""あなたは以下の作業ディレクトリ内で作業してください。
+
+作業ディレクトリ: {workspace.path}
+
+ディレクトリ構造:
+  input/   : 入力ファイル（読み取り専用として扱うこと）
+{input_list}
+  repos/   : clone した repo
+{repos_list}
+  output/  : 成果物の書き出し先
+  logs/    : 実行ログ
+
+制約:
+- 作業ディレクトリ外には書き込まないこと
+- 成果物は output/ に保存すること
+- 完了したら output/result.md に要約を書くこと
+
+タスク:
+{task}"""
+
+
 def _execute_claude_code(job: Job) -> str:
-    """Claude Code CLI でタスクを実行する（定額プラン対応）。
+    """Claude Code CLI でタスクを sandbox 内で実行する（定額プラン対応）。
 
     事前条件:
       - `claude` コマンドが PATH にあること
       - `claude auth login` 済みで Max/Pro プランのアカウントであること
+
+    sandbox への閉じ込め:
+      - `--cwd workspace/` で作業ディレクトリを sandbox に設定
+      - `--add-dir workspace/` でファイルアクセスを sandbox 内に限定
+      - プロンプトで output/ への書き出しを明示
     """
+    workspace = get_workspace(job.job_id)
+    if workspace is None:
+        raise RuntimeError(f"workspace が見つかりません: {job.job_id}")
+
+    prompt = _build_workspace_prompt(job.task, workspace)
+
     try:
         result = subprocess.run(
-            ["claude", "--print", "--output-format", "json", job.task],
+            [
+                "claude", "--print", "--output-format", "json",
+                "--cwd",     str(workspace.path),
+                "--add-dir", str(workspace.path),
+                prompt,
+            ],
             capture_output=True,
             text=True,
             timeout=300,
@@ -119,9 +167,18 @@ def _execute_claude_code(job: Job) -> str:
     # --output-format json の場合 {"result": "..."} 形式で返ってくる
     try:
         data = json.loads(result.stdout)
-        return data.get("result") or data.get("content") or result.stdout.strip()
+        text = data.get("result") or data.get("content") or result.stdout.strip()
     except (json.JSONDecodeError, AttributeError):
-        return result.stdout.strip() or "(no output)"
+        text = result.stdout.strip() or "(no output)"
+
+    # output/result.md があれば優先して返す
+    result_md = workspace.output / "result.md"
+    if result_md.exists():
+        md_content = result_md.read_text(encoding="utf-8").strip()
+        if md_content:
+            return md_content
+
+    return text
 
 
 # ── パイプライン ──────────────────────────────────────────────────────────────

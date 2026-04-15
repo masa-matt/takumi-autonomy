@@ -8,11 +8,14 @@ services:
     env_file:
       - .env
 
-    # runtime/ をホストにマウント — 再起動してもメモリ・レポートが残る
-    # inbox/ をホストにマウント — ユーザーがファイルを置く場所（read-only）
     volumes:
-      - ./runtime:/app/runtime
+      # job workspaces を永続化（コンテナ再起動後も job 状態が残る）
+      - ./takumi/jobs:/app/takumi/jobs
+      # inbox: ユーザーがファイルを置く場所（read-only）
       - ./inbox:/app/inbox:ro
+      # Claude Code 認証情報（TAKUMI_EXECUTOR=claude-code 使用時に必要）
+      # claude auth login 済みのホストの認証情報をコンテナに渡す
+      - ~/.claude:/root/.claude:ro
 
     # ログをローテーションする
     logging:

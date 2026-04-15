@@ -1,7 +1,7 @@
-# Takumi Autonomy Bot — Dockerfile
+# Takumi Local Autonomy V2 Bot — Dockerfile
 #
 # ビルド: docker build -t takumi-bot .
-# 実行:   docker-compose up -d
+# 実行:   docker compose up -d
 
 FROM python:3.12-slim
 
@@ -11,17 +11,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ソースをコピー
-COPY apps/     apps/
+# V2 ソースをコピー
+COPY takumi/ takumi/
 COPY packages/ packages/
 
-# runtime/ は volume mount するためここでは作るだけ
-RUN mkdir -p runtime/workspaces/jobs \
-             runtime/reports \
-             runtime/approvals \
-             runtime/memory/entries \
-             runtime/memory/skills \
-             runtime/logs/claude_code
+# job workspaces と inbox ディレクトリを作成（volume mount のマウントポイント）
+RUN mkdir -p takumi/jobs inbox
 
-# Bot 起動
-CMD ["python", "apps/discord-bot/gateway.py"]
+# V2 Bot 起動
+CMD ["python", "-m", "takumi.discord.gateway"]
