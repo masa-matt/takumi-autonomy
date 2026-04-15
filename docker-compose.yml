@@ -15,8 +15,9 @@ services:
     volumes:
       # job workspaces を永続化（コンテナ再起動後も job 状態が残る）
       - ./takumi/jobs:/app/takumi/jobs
-      # inbox: ユーザーがファイルを置く場所（read-only）
-      - ./inbox:/app/inbox:ro
+      # inbox: ユーザーとのファイル受け渡し場所
+      # Bot が .auth_code 等を書き込むこともあるため ro は外す
+      - ./inbox:/app/inbox
       # Claude Code 認証情報を named volume で永続化
       # 初回起動時に Bot が Discord へ認証URLを送信するので、そこから認証する
       - claude_auth:/root/.claude
