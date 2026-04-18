@@ -11,21 +11,18 @@ Phase 1: ローカル sandbox 足場
 - CP-04 Hermes Recall / Save 統合 — ✅ PoC 通過（2026-04-18）
 - CP-05 単一 repo 調査・修正・検証 — ✅ PoC 通過（2026-04-18）
 - CP-06 複数 repo 比較と影響範囲整理 — ✅ PoC 通過（2026-04-18）
+- CP-07 PR 本文案と PR Review — ✅ PoC 通過（2026-04-18）
 
 ## 現在の checkpoint
-CP-LV2-07 PR 本文案と PR Review — **PoC 通過（2026-04-18）**
+CP-LV2-08 承認境界・停止条件・handoff 運用 — **PoC 通過（2026-04-18）**
 
 ## 達成状況
-- [x] プロンプトに PR 支援手順（タイトル案・本文案・review コメント草案・stop 条件）を追加
-- [x] `docs/runbooks/pr-workflow.md` 作成
-- [x] `docs/templates/pr-body.md` 作成
-- [x] `docs/templates/pr-review.md` 作成
+- [x] `docs/runbooks/approval-and-stop-conditions.md` — 実装 ↔ docs 対照表
+- [x] `docs/handoff.md` — セッション引き継ぎノート（更新）
+- [x] `docs/operating-rules.md` — 運用ルール全文書化
 
 ## 次の checkpoint
-CP-LV2-08 承認境界・停止条件・handoff 運用
-
-## その後
-- CP-09: V2 運用試験
+CP-LV2-09 V2 運用試験
 
 ## 今回まだ作り込まないもの
 - 本番 repo への push / PR 自動実行

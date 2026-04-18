@@ -183,17 +183,17 @@ PR を作る前段の実務を支援できる状態にする。
 ### 目的
 半自律運用として安全に回せる状態にする。
 
-### 通過条件
-- [ ] 要承認操作一覧が実装と docs の両方で一致している
-- [ ] 停止条件が実際に機能する
-- [ ] blocked 時に理由と必要入力を返せる
-- [ ] 毎セッションで handoff が残る
-- [ ] report / logs / memory candidates が残る
+### 通過条件（**通過 2026-04-18**）
+- [x] 要承認操作一覧が実装と docs の両方で一致している（approval-and-stop-conditions.md ↔ job_runner.py）
+- [x] 停止条件が実際に機能する（_classify + プロンプト stop 条件）
+- [x] blocked 時に理由と必要入力を返せる（gateway.py BLOCKED ハンドリング）
+- [x] 毎セッションで handoff が残る（output/handoff.md 指示 + docs/handoff.md）
+- [x] report / logs / memory candidates が残る（Hermes write_memory + create_skill_draft）
 
 ### 成果物
-- `docs/runbooks/approval-and-stop-conditions.md`
-- `docs/handoff.md`
-- `docs/operating-rules.md`
+- `docs/runbooks/approval-and-stop-conditions.md` ✅
+- `docs/handoff.md` ✅（更新）
+- `docs/operating-rules.md` ✅
 
 ### Git tag
 - `cp-lv2-08-ops-safety`
