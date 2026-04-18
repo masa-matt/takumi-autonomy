@@ -90,11 +90,11 @@ def copy_all_inbox(ws: Workspace) -> list[Path]:
     return copied
 
 
-def copy_to_outbox(ws: Workspace, job_id: str) -> list[Path]:
-    """sandbox の output/ を outbox/<job_id>/ にコピーして返す。"""
+def copy_to_outbox(ws: Workspace, dirname: str) -> list[Path]:
+    """sandbox の output/ を outbox/<dirname>/ にコピーして返す。"""
     if not ws.output.exists():
         return []
-    dest_dir = OUTBOX_DIR / job_id
+    dest_dir = OUTBOX_DIR / dirname
     dest_dir.mkdir(parents=True, exist_ok=True)
     copied = []
     for src in ws.output.iterdir():

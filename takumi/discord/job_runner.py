@@ -13,7 +13,17 @@ import logging
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Callable, Optional
+
+_SOUL_MD = Path(__file__).parent.parent.parent / "docs" / "SOUL.md"
+
+
+def _load_soul() -> str:
+    try:
+        return _SOUL_MD.read_text(encoding="utf-8") if _SOUL_MD.exists() else ""
+    except Exception:
+        return ""
 
 from takumi.core.job_state import Job, JobStatus, create_job
 from takumi.hermes import search_sessions, search_skills, write_memory, create_skill_draft
@@ -125,17 +135,20 @@ def _build_recall_context(task: str) -> str:
 
 
 def _build_workspace_prompt(task: str, workspace) -> str:
-    """workspace context と Recall 結果を含むプロンプトを生成する。"""
+    """SOUL・Recall・workspace context を含むプロンプトを生成する。"""
     input_files = list(workspace.input.iterdir()) if workspace.input.exists() else []
     input_list = "\n".join(f"    - {f.name}" for f in input_files) or "    （なし）"
 
     repos = list(workspace.repos.iterdir()) if workspace.repos.exists() else []
     repos_list = "\n".join(f"    - {r.name}" for r in repos) or "    （なし）"
 
+    soul = _load_soul()
+    soul_section = f"{soul}\n\n---\n\n" if soul else ""
+
     recall = _build_recall_context(task)
     recall_section = f"\n## Recall（過去の記憶）\n{recall}\n" if recall else ""
 
-    return f"""あなたは以下の作業ディレクトリ内で作業してください。
+    return f"""{soul_section}あなたは以下の作業ディレクトリ内で作業してください。
 {recall_section}
 作業ディレクトリ: {workspace.path}
 

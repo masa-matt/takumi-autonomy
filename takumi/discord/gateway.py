@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """takumi.discord.gateway — Takumi Local Autonomy V2 Discord Bot
 
-コマンド:
-  /task <description>   タスクを投入（スラッシュコマンド、推奨）
-  /status <job_id>      job の現在状態を確認
-  /ping                 死活確認
-  /files [filename]     inbox 一覧 / 次のタスクにファイルを添付
-  @Takumi <タスク>      メンションでもタスク投入可
+タスクチャンネル（DISCORD_TASK_CHANNELS）での普通のメッセージ、
+または @Takumi メンション / /task コマンドでタスクを受け付ける。
 
 環境変数:
-  DISCORD_TOKEN     必須
-  ANTHROPIC_API_KEY 任意（TAKUMI_EXECUTOR=api 時に必要）
-  TAKUMI_EXECUTOR   api（デフォルト）/ claude-code
+  DISCORD_TOKEN              必須
+  DISCORD_TASK_CHANNELS      カンマ区切りのチャンネルID（自然言語チャット用）
+  DISCORD_GUILD_ID           スラッシュコマンドの即時反映用（推奨）
+  ANTHROPIC_API_KEY          任意（TAKUMI_EXECUTOR=api 時に必要）
+  TAKUMI_EXECUTOR            api（デフォルト）/ claude-code
 """
 
 import asyncio
 import logging
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -50,15 +49,29 @@ bot = commands.Bot(
 _thread_pool = ThreadPoolExecutor(max_workers=4)
 
 # BLOCKED ジョブを Discord メッセージと紐づけておく辞書
-# {job_id: asyncio.Future}  — Future が resolve されると承認/却下が伝わる
 _pending_approvals: dict[str, asyncio.Future] = {}
 
+# 自然言語でタスクを受け付けるチャンネル（DISCORD_TASK_CHANNELS=id1,id2）
+_TASK_CHANNEL_IDS: set[int] = set(
+    int(cid.strip())
+    for cid in os.environ.get("DISCORD_TASK_CHANNELS", "").split(",")
+    if cid.strip().isdigit()
+)
 
-# ── Embed ヘルパー ─────────────────────────────────────────────────────────────
+
+def _task_slug(task: str, job_id: str) -> str:
+    """タスク文字列から人間可読なスラグを生成する（outbox dir / スレッド名用）。"""
+    mmdd = job_id[8:12]  # job-20260418-xxx → "0418"
+    slug = re.sub(r'[^\w\u3040-\u30ff\u4e00-\u9fff]+', '-', task, flags=re.UNICODE)
+    slug = slug.strip('-')[:25]
+    return f"{mmdd}-{slug}" if slug else mmdd
+
+
+# ── ステータス表示 ─────────────────────────────────────────────────────────────
 
 _STATUS_ICON = {
     JobStatus.QUEUED:   "📥",
-    JobStatus.RUNNING:  "🔄",
+    JobStatus.RUNNING:  "⚙️",
     JobStatus.BLOCKED:  "🔒",
     JobStatus.DONE:     "✅",
     JobStatus.FAILED:   "❌",
@@ -72,42 +85,61 @@ _STATUS_COLOR = {
     JobStatus.FAILED:   discord.Color.red(),
 }
 
+_STATUS_TEXT = {
+    JobStatus.QUEUED:   "受け取った、少し待って",
+    JobStatus.RUNNING:  "作業中...",
+    JobStatus.BLOCKED:  "確認が必要",
+    JobStatus.DONE:     None,   # result_summary を使う
+    JobStatus.FAILED:   None,   # error を使う
+}
 
-def _build_embed(job: Job) -> discord.Embed:
+
+def _build_embed(job: Job, slug: str | None = None) -> discord.Embed:
+    """Embed モード（/task コマンド等）用。"""
     icon  = _STATUS_ICON.get(job.status, "❓")
     color = _STATUS_COLOR.get(job.status, discord.Color.light_grey())
+    title = slug or job.job_id
 
     embed = discord.Embed(
-        title=f"{icon} {job.job_id}",
-        description=f"**Task:** {job.task[:120]}",
+        title=f"{icon} {title}",
+        description=job.task[:120],
         color=color,
     )
-    embed.add_field(name="Status", value=job.status.value, inline=True)
 
     if job.block_reason:
-        embed.add_field(name="Block reason", value=job.block_reason[:300], inline=False)
+        embed.add_field(name="確認事項", value=job.block_reason[:300], inline=False)
 
     if job.result_summary:
-        embed.add_field(name="Result", value=job.result_summary[:1000], inline=False)
+        embed.add_field(name="結果", value=job.result_summary[:1000], inline=False)
 
     if job.error:
-        embed.add_field(name="Error", value=job.error[:500], inline=False)
+        embed.add_field(name="エラー", value=job.error[:500], inline=False)
 
     if job.started_at and job.completed_at:
-        embed.add_field(name="Started",   value=job.started_at[:19].replace("T", " "), inline=True)
-        embed.add_field(name="Completed", value=job.completed_at[:19].replace("T", " "), inline=True)
+        embed.add_field(name="開始", value=job.started_at[:19].replace("T", " "), inline=True)
+        embed.add_field(name="完了", value=job.completed_at[:19].replace("T", " "), inline=True)
 
     embed.set_footer(text=job.job_id)
     return embed
 
 
+def _build_chat_text(job: Job) -> str:
+    """チャットモード（タスクチャンネル）用のプレーンテキスト。"""
+    if job.status == JobStatus.DONE:
+        text = job.result_summary or "完了"
+        return text
+    if job.status == JobStatus.FAILED:
+        return f"失敗した。\n> {job.error[:400]}" if job.error else "失敗した。"
+    if job.status == JobStatus.BLOCKED:
+        return f"確認が必要。\n> {job.block_reason[:300]}" if job.block_reason else "確認が必要。"
+    return _STATUS_TEXT.get(job.status, "...")
+
+
 # ── 承認ボタン View ────────────────────────────────────────────────────────────
 
 class ApprovalView(discord.ui.View):
-    """BLOCKED ジョブへの承認 / 却下ボタン。"""
-
     def __init__(self, job_id: str, future: asyncio.Future):
-        super().__init__(timeout=300)  # 5 分で自動タイムアウト
+        super().__init__(timeout=300)
         self.job_id = job_id
         self.future = future
 
@@ -135,33 +167,52 @@ class ApprovalView(discord.ui.View):
 
 async def _run_job(
     status_msg: discord.Message,
-    channel_id: int,
     description: str,
+    chat_mode: bool = False,
 ) -> None:
     """タスクを実行して Discord メッセージを更新する（共通処理）。
 
-    メッセージ送信後の処理をまとめたヘルパー。
-    _process_task（mention）と _process_task_interaction（slash）の両方から呼ばれる。
+    chat_mode=True のとき、Embed ではなくプレーンテキストで更新する。
     """
     loop = asyncio.get_event_loop()
+    slug_holder: list[str] = []  # job 確定後に slug を格納
 
     def on_status(job: Job) -> None:
-        embed = _build_embed(job)
-        if job.status == JobStatus.BLOCKED:
-            future = loop.create_future()
-            _pending_approvals[job.job_id] = future
-            view = ApprovalView(job.job_id, future)
-            asyncio.run_coroutine_threadsafe(
-                status_msg.edit(content=None, embed=embed, view=view),
-                loop,
-            ).result(timeout=10)
-        else:
-            asyncio.run_coroutine_threadsafe(
-                status_msg.edit(content=None, embed=embed, view=None),
-                loop,
-            ).result(timeout=10)
+        if not slug_holder:
+            slug_holder.append(_task_slug(job.task, job.job_id))
+        slug = slug_holder[0]
 
-    # inbox の全ファイルを自動で渡す（明示的予約不要）
+        if chat_mode:
+            text = _build_chat_text(job)
+            if job.status == JobStatus.BLOCKED:
+                future = loop.create_future()
+                _pending_approvals[job.job_id] = future
+                view = ApprovalView(job.job_id, future)
+                asyncio.run_coroutine_threadsafe(
+                    status_msg.edit(content=text, view=view),
+                    loop,
+                ).result(timeout=10)
+            else:
+                asyncio.run_coroutine_threadsafe(
+                    status_msg.edit(content=text, view=None),
+                    loop,
+                ).result(timeout=10)
+        else:
+            embed = _build_embed(job, slug)
+            if job.status == JobStatus.BLOCKED:
+                future = loop.create_future()
+                _pending_approvals[job.job_id] = future
+                view = ApprovalView(job.job_id, future)
+                asyncio.run_coroutine_threadsafe(
+                    status_msg.edit(content=None, embed=embed, view=view),
+                    loop,
+                ).result(timeout=10)
+            else:
+                asyncio.run_coroutine_threadsafe(
+                    status_msg.edit(content=None, embed=embed, view=None),
+                    loop,
+                ).result(timeout=10)
+
     inbox_files = [f.name for f in list_inbox()]
 
     job: Job = await loop.run_in_executor(
@@ -193,34 +244,39 @@ async def _run_job(
                 if f.is_file() and f.name != "result.md"
             ]
             if deliverables:
-                copy_to_outbox(ws, job.job_id)
-                # outbox から result.md を除去
-                (OUTBOX_DIR / job.job_id / "result.md").unlink(missing_ok=True)
-                log.info("Job %s: %d deliverable(s) → outbox", job.job_id, len(deliverables))
+                slug = slug_holder[0] if slug_holder else job.job_id
+                copy_to_outbox(ws, slug)
+                (OUTBOX_DIR / slug / "result.md").unlink(missing_ok=True)
+                log.info("Job %s: %d deliverable(s) → outbox/%s", job.job_id, len(deliverables), slug)
 
     log.info("Job %s finished: status=%s", job.job_id, job.status.value)
 
 
-async def _process_task(message: discord.Message, description: str) -> None:
-    """メンション経由のタスク処理。"""
-    status_msg = await message.reply(f"📥 **Queued…**\n> {description[:120]}")
-    await _run_job(status_msg, message.channel.id, description)
+async def _process_task_mention(message: discord.Message, description: str) -> None:
+    """@メンション経由のタスク処理。"""
+    status_msg = await message.reply("受け取った、少し待って")
+    await _run_job(status_msg, description, chat_mode=True)
+
+
+async def _process_task_channel(message: discord.Message, description: str) -> None:
+    """タスクチャンネルでの自然言語メッセージ処理。スレッドを作って返す。"""
+    slug = re.sub(r'[^\w\u3040-\u30ff\u4e00-\u9fff]+', '-', description, flags=re.UNICODE)
+    thread_name = slug.strip('-')[:80] or "task"
+    thread = await message.create_thread(name=thread_name, auto_archive_duration=60)
+    status_msg = await thread.send("受け取った、少し待って")
+    await _run_job(status_msg, description, chat_mode=True)
 
 
 async def _process_task_interaction(interaction: discord.Interaction, description: str) -> None:
     """スラッシュコマンド経由のタスク処理。"""
     await interaction.response.defer()
-    status_msg = await interaction.followup.send(
-        f"📥 **Queued…**\n> {description[:120]}", wait=True
-    )
-    channel_id = interaction.channel_id or 0
-    await _run_job(status_msg, channel_id, description)
+    status_msg = await interaction.followup.send("受け取った、少し待って", wait=True)
+    await _run_job(status_msg, description, chat_mode=False)
 
 
-# ── inbox ヘルパー（共通）─────────────────────────────────────────────────────
+# ── inbox / outbox 一覧 ────────────────────────────────────────────────────────
 
 def _handle_files_list() -> str:
-    """inbox / outbox の一覧テキストを返す。"""
     inbox = list_inbox()
     inbox_text = (
         "\n".join(f"  • `{f.name}`" for f in inbox)
@@ -239,28 +295,18 @@ def _handle_files_list() -> str:
     return (
         f"📥 **inbox** ({len(inbox)} files)\n{inbox_text}\n\n"
         f"📤 **outbox**\n{outbox_text}\n\n"
-        f"inbox のファイルは次の `/task` 実行時に自動で渡されます。\n"
+        f"inbox のファイルは次のタスク実行時に自動で渡されます。\n"
         f"成果物ファイルはタスク完了時に自動で outbox に取り出されます。"
     )
 
 
-
-
 # ── Claude Code 認証フロー ──────────────────────────────────────────────────────
 
-
 async def _ensure_claude_auth() -> None:
-    """Claude Code executor の認証状態を確認し、未認証・期限切れなら Discord に通知する。
-
-    認証情報はホスト側の scripts/sync_claude_auth.py（または start.sh）が
-    macOS Keychain から取得してコンテナへコピーする。
-    コンテナ側は認証状態を確認するのみ。
-    """
     if os.environ.get("TAKUMI_EXECUTOR", "").lower() != "claude-code":
         return
 
     log.info("Claude Code executor: 認証状態を確認中…")
-
     result = subprocess.run(
         ["claude", "auth", "status", "--json"],
         capture_output=True, text=True,
@@ -294,10 +340,7 @@ async def _ensure_claude_auth() -> None:
     msg = (
         "🔐 **Claude Code の認証が必要です**\n\n"
         "ホスト（Mac）のターミナルで以下を実行してください:\n"
-        "```\npython3 scripts/sync_claude_auth.py\n```\n"
-        "macOS のキーチェーンアクセスダイアログが表示されます。\n"
-        "パスワードを入力すると認証情報がコンテナへ自動コピーされます。\n\n"
-        "次回からは `./start.sh` で起動すると自動的に同期されます。"
+        "```\npython3 scripts/sync_claude_auth.py\n```"
     )
     if channel:
         await channel.send(msg)
@@ -310,7 +353,6 @@ async def _ensure_claude_auth() -> None:
 
 @bot.event
 async def on_ready():
-    # スラッシュコマンド sync
     guild_id = os.environ.get("DISCORD_GUILD_ID")
     if guild_id:
         guild = discord.Object(id=int(guild_id))
@@ -321,9 +363,12 @@ async def on_ready():
         await bot.tree.sync()
         log.info("Slash commands synced globally (may take up to 1 hour).")
 
-    log.info("Takumi V2 Bot ready: %s (id=%s)", bot.user, bot.user.id)
+    if _TASK_CHANNEL_IDS:
+        log.info("Task channels: %s", _TASK_CHANNEL_IDS)
+    else:
+        log.info("DISCORD_TASK_CHANNELS not set — using @mention / /task only.")
 
-    # Claude Code 認証確認（claude-code モード時のみ）
+    log.info("Takumi V2 Bot ready: %s (id=%s)", bot.user, bot.user.id)
     await _ensure_claude_auth()
 
 
@@ -332,24 +377,36 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    # スレッド内のメッセージは無視（Bot が作ったスレッド内での追加メッセージ）
+    if isinstance(message.channel, discord.Thread):
+        await bot.process_commands(message)
+        return
+
+    # タスクチャンネル: 普通のメッセージをタスクとして受け付ける
+    if _TASK_CHANNEL_IDS and message.channel.id in _TASK_CHANNEL_IDS:
+        ctx = await bot.get_context(message)
+        if ctx.valid:
+            await bot.process_commands(message)
+            return
+        description = message.content.strip()
+        if description:
+            await _process_task_channel(message, description)
+        return
+
+    # @メンション
     if bot.user in message.mentions:
         content = message.content
         for mention in (f"<@{bot.user.id}>", f"<@!{bot.user.id}>"):
             content = content.replace(mention, "")
         description = content.strip()
-
         if not description:
-            await message.reply(
-                "タスクの内容を書いてください。\n例: `@Takumi この repo の failing test を調べて`"
-            )
+            await message.reply("何かやることある？")
             return
-
         ctx = await bot.get_context(message)
         if ctx.valid:
             await bot.process_commands(message)
             return
-
-        await _process_task(message, description)
+        await _process_task_mention(message, description)
         return
 
     await bot.process_commands(message)
@@ -358,12 +415,12 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("⚠️ タスクの内容が必要です。例: `/task description:この repo を調べて`")
+        await ctx.send("タスクの内容を書いて")
     elif isinstance(error, commands.CommandNotFound):
         pass
     else:
         log.error("Command error: %s", error)
-        await ctx.send(f"⚠️ エラー: {error}")
+        await ctx.send(f"エラー: {error}")
 
 
 # ── スラッシュコマンド ─────────────────────────────────────────────────────────
@@ -375,13 +432,11 @@ async def slash_task(interaction: discord.Interaction, description: str):
 
 
 @bot.tree.command(name="status", description="job の現在状態を確認する")
-@app_commands.describe(job_id="確認する job の ID（例: job-20260415-xxxxxxxx）")
+@app_commands.describe(job_id="確認する job の ID（例: job-20260418-xxxxxxxx）")
 async def slash_status(interaction: discord.Interaction, job_id: str):
     job = Job.load(job_id)
     if job is None:
-        await interaction.response.send_message(
-            f"❓ job が見つかりません: `{job_id}`", ephemeral=True
-        )
+        await interaction.response.send_message(f"job が見つからない: `{job_id}`", ephemeral=True)
         return
     await interaction.response.send_message(embed=_build_embed(job))
 
@@ -389,7 +444,7 @@ async def slash_status(interaction: discord.Interaction, job_id: str):
 @bot.tree.command(name="ping", description="死活確認")
 async def slash_ping(interaction: discord.Interaction):
     await interaction.response.send_message(
-        f"🏓 Pong! latency={bot.latency * 1000:.0f}ms  (Takumi V2)"
+        f"生きてる。latency={bot.latency * 1000:.0f}ms"
     )
 
 
