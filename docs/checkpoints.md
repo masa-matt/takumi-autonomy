@@ -96,12 +96,12 @@ Discord から依頼してジョブとして扱える状態にする。
 ### 目的
 毎回ゼロから始めない状態を作る。
 
-### 通過条件
-- [ ] `hermes_session_search` が呼べる
-- [ ] `hermes_memory_write` が呼べる
-- [ ] `hermes_skill_create` または `hermes_skill_update` が呼べる
-- [ ] セッション終了時に memory 候補を残せる
-- [ ] hooks または同等機構で Recall / Save のログが取れる
+### 通過条件（**通過 2026-04-18**）
+- [x] `hermes_session_search` が呼べる
+- [x] `hermes_memory_write` が呼べる
+- [x] `hermes_skill_create` または `hermes_skill_update` が呼べる
+- [x] セッション終了時に memory 候補を残せる
+- [x] hooks または同等機構で Recall / Save のログが取れる（コンテナログ INFO で確認）
 
 ### 成果物
 - `takumi/hermes_bridge/`
