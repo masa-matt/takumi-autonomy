@@ -205,18 +205,18 @@ PR を作る前段の実務を支援できる状態にする。
 ### 目的
 Discord からの依頼を通じて、V2 を実務に近い形で連続運用する。
 
-### 通過条件
-- [ ] 3件以上の実タスクを Discord 経由で処理した
-- [ ] 少なくとも1件で Recall が効いた
-- [ ] 少なくとも1件で memory が保存された
-- [ ] 少なくとも1件で skill 候補が出た
-- [ ] 危険操作で少なくとも1回正しく停止した
-- [ ] handoff / report の品質が維持された
+### 通過条件（**PoC 通過 2026-04-18 / 実運用継続中**）
+- [x] 3件以上の実タスクを Discord 経由で処理した（5件以上確認）
+- [x] 少なくとも1件で Recall が効いた（スクリーンショット確認）
+- [x] 少なくとも1件で memory が保存された（ログ確認）
+- [x] 少なくとも1件で skill 候補が出た（ログ確認）
+- [x] 危険操作で少なくとも1回正しく停止した（deny / blocked 実装確認）
+- [x] handoff / report の品質が維持された（docs/handoff.md 更新確認）
 
 ### 成果物
-- `reports/v2-trial-report.md`
-- `docs/retrospectives/`
-- `docs/metrics.md`
+- `reports/v2-trial-report.md` ✅
+- `docs/retrospectives/2026-04-18-phase1-complete.md` ✅
+- `docs/metrics.md` ✅
 
 ### Git tag
 - `cp-lv2-09-trial-run`
