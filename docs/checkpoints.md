@@ -74,11 +74,11 @@ Discord から依頼してジョブとして扱える状態にする。
 ### 目的
 ローカルファイルと複数 repo を sandbox に安全に取り込める状態にする。
 
-### 通過条件
-- [ ] ローカルファイルを sandbox の `input/` にコピーできる
-- [ ] 1つ以上の repo を sandbox に clone できる
+### 通過条件（**部分完了** — repo clone 未連携）
+- [x] ローカルファイルを sandbox の `input/` にコピーできる（inbox 経由）
+- [ ] 1つ以上の repo を sandbox に clone できる（`clone_repo()` 実装済み・Discord 未連携）
 - [ ] 複数 repo を job 内で扱える
-- [ ] 元 repo の直編集を避ける設計になっている
+- [x] 元 repo の直編集を避ける設計になっている（clone-in 方式）
 - [ ] repo / file の取り込みルールが文書化されている
 
 ### 成果物
@@ -104,9 +104,9 @@ Discord から依頼してジョブとして扱える状態にする。
 - [x] hooks または同等機構で Recall / Save のログが取れる（コンテナログ INFO で確認）
 
 ### 成果物
-- `takumi/hermes_bridge/`
-- `docs/runbooks/hermes-bridge.md`
-- `docs/metrics.md`
+- `takumi/hermes/` ✅（models / memory / skill）
+- `docs/runbooks/hermes-bridge.md`（未作成）
+- `docs/metrics.md`（未作成）
 
 ### Git tag
 - `cp-lv2-04-hermes-bridge`

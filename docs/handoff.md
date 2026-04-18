@@ -1,79 +1,72 @@
 # Handoff
 
 ## Session Goal
-Hermes Recall / Save を V2 に統合し、CP-04 の実装を完了する。
+Discord UX の改善（自然チャット・スレッド・SOUL.md 人格）と CP ドキュメントの整備。
 
 ## Current Checkpoint
-CP-LV2-04 Hermes Recall / Save 統合 — **実装完了、Discord テスト待ち**
+CP-LV2-03 Repo / File 取り込み — **部分完了、repo clone 連携が残り**
 
-## Context Read
-- `.claude/CLAUDE.md`
-- `docs/checkpoints.md`
-- `docs/current-milestone.md`
-- `docs/handoff.md`（前回）
+## 完了済み CP
+| CP | 内容 | 通過日 |
+|---|---|---|
+| CP-00 | 仕様固定 | 2026-04-18 |
+| CP-01 | Job Sandbox 基盤 | 2026-04-18 |
+| CP-02 | Discord 受付・Job 状態 | 2026-04-18 |
+| CP-04 | Hermes Recall / Save | 2026-04-18 |
 
-## Done
+## Done（このセッション）
 
-### CP-00/01/02 完了マーク
-- `docs/checkpoints.md`: CP-00/01/02 の通過条件をすべて `[x]` に更新（通過日 2026-04-18）
+### Discord UX 全面改善
+- `DISCORD_TASK_CHANNELS` 環境変数で指定したチャンネルでは `/task` 不要
+- 普通のメッセージ → スレッドを作成して返答
+- スレッド内の続きのメッセージにも応答（`on_message` でスレッド親チャンネルを判定）
+- 雑談（`_is_task()` = False）→ Claude Code 直接呼び出し、SOUL 人格で一言返す
+- 作業依頼 → スレッド内でジョブ実行、自然な口調で報告
 
-### takumi/hermes/ 作成（新規）
-- `takumi/hermes/__init__.py`: `search_sessions`, `write_memory`, `create_skill_draft`, `search_skills` をエクスポート
-- `takumi/hermes/models.py`: MemoryEntry / SearchHit / SearchResult / SaveResult / Skill / SkillResult（外部依存なし）
-- `takumi/hermes/memory.py`: V1 `memory_api.py` + `session_search_api.py` を V2 Job 型に適合させて移植
-  - ストレージ: `runtime/memory/entries/*.json`（`HERMES_ENTRIES_DIR` env で上書き可）
-  - センシティブパターンガード（token / password / secret 等）
-  - キーワード Jaccard スコアで上位 3 件を返す
-- `takumi/hermes/skill.py`: V1 `skill_api.py` を V2 Job 型に適合させて移植
-  - ストレージ: `runtime/memory/skills/*.json`（`HERMES_SKILLS_DIR` env で上書き可）
-  - DRAFT → APPROVED の承認フロー（まだ Discord コマンド未接続）
+### SOUL.md 人格
+- `docs/SOUL.md` 新規作成（Takumi Shin の人格定義）
+- `Dockerfile` に `COPY docs/ docs/` を追加（コンテナに含める）
+- `job_runner.py` の `_build_workspace_prompt()` 先頭に SOUL.md を注入
+- `_run_chat_reply()` でも SOUL.md を使った即時返答
 
-### job_runner.py に Recall / Save を統合
-- `_build_recall_context(task)`: `search_sessions` + `search_skills` を呼び、プロンプトに注入するテキストを生成
-- `_build_workspace_prompt()`: Recall セクションを追加（ヒット 0 件の場合は省略）
-- `_save(job, output, danger_level)`: job 完了後に `write_memory` + `create_skill_draft` を呼ぶ
-  - `run_job`: auto_allow パスで `_save(job, output, danger)` を呼ぶ
-  - `resume_job`: 承認後実行パスで `_save(job, output, "approval_required")` を呼ぶ
-  - 例外は WARNING でログに落とすだけ（Hermes 失敗で job 失敗にしない）
+### result.md フォーマット改善
+- 「要約・受信メッセージ・応答・備考」形式を廃止
+- プロンプトに「Markdown ヘッダー禁止・自然な話し言葉で書け」を追加
 
-### docker-compose.yml
-- `./runtime:/app/runtime` volume を追加（コンテナ再起動後もメモリが保持される）
+### outbox スラグ化
+- `copy_to_outbox(ws, dirname)` — 引数を job_id → dirname に変更
+- outbox ディレクトリ名: `job-20260418-xxx/` → `0418-タスク名/`
+- `result.md` のみの場合は outbox に出力しない（作業ログ扱い）
+
+### その他
+- `.env.example` に `DISCORD_TASK_CHANNELS` 等の新環境変数を追加
+- `outbox/` を git 管理から除外
 
 ## Not Done
-- Discord で `/task 前やったこと覚えてる？` を実際にテストして CP-04 通過確認
-- skill approve/reject の Discord コマンド
-- `docs/runbooks/hermes-bridge.md`（CP-04 成果物）
-- Repo clone・取り込みフロー（CP-03）
-- CP-05: 単一 repo 調査・修正・検証
+- CP-03 repo clone の Discord 連携（プロンプト追加 or パイプライン制御）
+- `docs/runbooks/repo-and-file-ingress.md`
+- `docs/runbooks/hermes-bridge.md`
+- CP-05〜09
 
 ## Files Changed
-- `docs/checkpoints.md` — CP-00/01/02 を通過済みに更新
-- `docs/current-milestone.md` — CP-04 に更新
-- `takumi/hermes/__init__.py` — 新規
-- `takumi/hermes/models.py` — 新規
-- `takumi/hermes/memory.py` — 新規
-- `takumi/hermes/skill.py` — 新規
-- `takumi/discord/job_runner.py` — Recall 注入、Save 呼び出し、_build_recall_context 追加
-- `docker-compose.yml` — runtime volume 追加
-
-## Validation（次回起動で確認すること）
-1. `docker compose up -d --build` → コンテナ起動
-2. `/task 元気？` → job done、`runtime/memory/entries/mem-*.json` が生成される
-3. `/task 前やったこと覚えてる？` → プロンプトに Recall セクションが含まれる（コンテナログで確認）
-4. `ls runtime/memory/entries/` → エントリが増えている
-
-## Risks / Concerns
-- `runtime/` をホスト側マウントにしたため、コンテナ内の `takumi` ユーザー（UID 1000）が書き込めるか要確認
-  → `chown -R 1000:1000 runtime/` を必要に応じてホストで実行
+- `Dockerfile` — `COPY docs/ docs/` 追加
+- `docs/SOUL.md` — 新規
+- `docs/checkpoints.md` — CP-00/01/02/04 通過マーク、CP-03 部分完了を明記
+- `docs/current-milestone.md` — 現在地更新
+- `docs/handoff.md` — 本ファイル
+- `.env.example` — 新環境変数追加
+- `takumi/discord/gateway.py` — タスクチャンネル・スレッド・雑談分岐・outbox スラグ
+- `takumi/discord/job_runner.py` — SOUL.md 注入・result.md 指示改善
+- `takumi/sandbox/ingress.py` — `copy_to_outbox(dirname)` に変更
 
 ## Suggested Next Step
-1. `./start.sh` でコンテナを再起動してビルドを反映
-2. Discord で `/task 元気？` → エントリ生成を確認
-3. Discord で `/task 前やったこと覚えてる？` → Recall が効くか確認 → CP-04 通過
-4. `docs/runbooks/hermes-bridge.md` を作成して CP-04 成果物を整える
+1. CP-03 完了: `_build_workspace_prompt()` に「URL があれば repos/ にクローンして作業」追加
+2. `docs/runbooks/repo-and-file-ingress.md` 作成
+3. CP-03 通過確認: Discord で GitHub URL を含むタスクを投げてクローン→調査が動くか確認
+4. CP-05 へ進む
 
 ## Memory Candidates
-- `takumi/hermes/` のストレージパスは env var で差し替え可能（`HERMES_ENTRIES_DIR` / `HERMES_SKILLS_DIR`）
-- Recall は job_runner の `_build_workspace_prompt()` でプロンプトに注入される
-- Save は `_save()` が `run_job` / `resume_job` 完了時に呼ばれる（例外は WARNING のみ）
-- `runtime/` をコンテナにマウントするため、ホスト側のパーミッション確認が必要な場合がある
+- `DISCORD_TASK_CHANNELS` を設定しないと自然チャットが動かない
+- SOUL.md はビルド時にイメージに焼き込む（volume ではない）→ 変更時は再ビルド必要
+- `_is_task()` のパターンに含まれない日本語動詞は雑談と判定される（調整可能）
+- スレッド内の会話は会話履歴を持たない（毎回 SOUL.md のみ）
