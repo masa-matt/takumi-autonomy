@@ -26,3 +26,4 @@ venv/
 runtime/memory/entries/*.json
 runtime/memory/metrics.json
 runtime/memory/skills/*.json
+outbox/
