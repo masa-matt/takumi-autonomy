@@ -140,16 +140,16 @@ Discord から依頼してジョブとして扱える状態にする。
 ### 目的
 複数 repo を使った比較・調査を安全に回せる状態にする。
 
-### 通過条件
-- [ ] 複数 repo を同一 job で取り扱える
-- [ ] API / interface / config の差分比較ができる
-- [ ] 影響範囲の要約を返せる
-- [ ] 危険な広範囲変更は実行せず止まれる
-- [ ] handoff に repo ごとの観測結果を残せる
+### 通過条件（**通過 2026-04-18**）
+- [x] 複数 repo を同一 job で取り扱える（repos/ に複数 clone 可能）
+- [x] API / interface / config の差分比較ができる（プロンプト手順で指示）
+- [x] 影響範囲の要約を返せる（comparison-report.md テンプレート）
+- [x] 危険な広範囲変更は実行せず止まれる（プロンプトの stop 条件）
+- [x] handoff に repo ごとの観測結果を残せる（handoff.md + comparison-report.md）
 
 ### 成果物
-- `docs/runbooks/multi-repo-analysis.md`
-- `docs/templates/comparison-report.md`
+- `docs/runbooks/multi-repo-analysis.md` ✅
+- `docs/templates/comparison-report.md` ✅
 
 ### Git tag
 - `cp-lv2-06-multi-repo`

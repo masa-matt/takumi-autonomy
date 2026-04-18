@@ -149,7 +149,7 @@ def _build_workspace_prompt(task: str, workspace) -> str:
 - すでに repos/ にクローン済みであれば再クローンしないこと
 - 元のリポジトリを直接 push / 編集依頼の送信はしないこと（sandbox 内で完結させること）
 
-リポジトリ調査・修正の手順（repos/ に repo がある場合）:
+リポジトリ調査・修正の手順（repos/ に repo が1つある場合）:
 1. repo 構造を把握する（README, package.json / pyproject.toml / go.mod / Makefile 等を確認）
 2. テストと lint の現状を実行して確認する（make test, pytest, npm test, go test ./... 等）
 3. failing test / lint があれば原因を特定する
@@ -159,6 +159,15 @@ def _build_workspace_prompt(task: str, workspace) -> str:
 7. output/handoff.md に調査・修正のサマリーを残すこと
    - 調査したこと、発見した問題、実施した修正、未解決の問題を書くこと
    - 次のアクション候補を含めること
+
+複数リポジトリの比較（repos/ に repo が複数ある場合）:
+1. 各 repo を独立して把握する（技術スタック・ディレクトリ構造・主要設定・API 境界）
+2. 目的の観点（API / interface / config / 依存バージョン 等）で差分を比較する
+3. 影響範囲を特定し、変更が必要な箇所を列挙する
+4. 広範囲かつ不可逆な変更（複数 repo にまたがる変更・依存グラフの変更等）は実行しないこと
+   - 代わりに「何を変えれば解決するか」を報告して止まること
+5. output/comparison-report.md に repo ごとの観測結果と比較サマリーを残すこと
+6. output/handoff.md に次のアクション候補を残すこと
 
 タスク:
 {task}"""
