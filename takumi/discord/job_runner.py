@@ -145,9 +145,10 @@ def _execute_claude_code(job: Job) -> str:
     try:
         result = subprocess.run(
             [
-                "claude", "--print", "--output-format", "json",
+                "claude", "-p", prompt,
+                "--output-format", "json",
                 "--add-dir", str(workspace.path),
-                prompt,
+                "--dangerously-skip-permissions",
             ],
             cwd=str(workspace.path),   # subprocess の作業ディレクトリを workspace に設定
             capture_output=True,

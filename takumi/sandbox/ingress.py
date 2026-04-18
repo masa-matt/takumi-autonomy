@@ -11,8 +11,9 @@ from pathlib import Path
 
 from takumi.sandbox.workspace import Workspace
 
-# inbox のデフォルトパス（Docker: /app/inbox, ローカル直接実行: ./inbox）
+# inbox / outbox のデフォルトパス
 INBOX_DIR = Path(os.environ.get("INBOX_DIR", "/app/inbox"))
+OUTBOX_DIR = Path(os.environ.get("OUTBOX_DIR", "/app/outbox"))
 
 
 # ── ファイル取り込み ──────────────────────────────────────────────────────────
@@ -76,6 +77,31 @@ def list_inbox() -> list[Path]:
     if not INBOX_DIR.exists():
         return []
     return sorted(p for p in INBOX_DIR.iterdir() if p.is_file() and p.name != ".gitkeep")
+
+
+def copy_all_inbox(ws: Workspace) -> list[Path]:
+    """inbox の全ファイルを sandbox の input/ にコピーする。"""
+    copied = []
+    for src in list_inbox():
+        try:
+            copied.append(copy_file(ws, src, dest_name=src.name))
+        except Exception:
+            pass
+    return copied
+
+
+def copy_to_outbox(ws: Workspace, job_id: str) -> list[Path]:
+    """sandbox の output/ を outbox/<job_id>/ にコピーして返す。"""
+    if not ws.output.exists():
+        return []
+    dest_dir = OUTBOX_DIR / job_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for src in ws.output.iterdir():
+        if src.is_file():
+            shutil.copy2(src, dest_dir / src.name)
+            copied.append(dest_dir / src.name)
+    return copied
 
 
 def copy_from_inbox(ws: Workspace, filename: str) -> Path:

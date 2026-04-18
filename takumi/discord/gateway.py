@@ -17,8 +17,6 @@
 import asyncio
 import logging
 import os
-import pathlib
-import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -28,7 +26,9 @@ from discord.ext import commands
 
 from takumi.core.job_state import Job, JobStatus
 from takumi.discord.job_runner import run_job, resume_job
-from takumi.sandbox.ingress import list_inbox, copy_from_inbox, INBOX_DIR
+from takumi.sandbox.ingress import (
+    list_inbox, copy_from_inbox, copy_to_outbox, INBOX_DIR, OUTBOX_DIR
+)
 
 # ── ロギング ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -51,10 +51,6 @@ _thread_pool = ThreadPoolExecutor(max_workers=4)
 # BLOCKED ジョブを Discord メッセージと紐づけておく辞書
 # {job_id: asyncio.Future}  — Future が resolve されると承認/却下が伝わる
 _pending_approvals: dict[str, asyncio.Future] = {}
-
-# チャンネルごとの pending inbox files
-# {channel_id: [filename, ...]}  — 次のタスクで input/ にコピーされる
-_pending_inbox_files: dict[int, list[str]] = {}
 
 
 # ── Embed ヘルパー ─────────────────────────────────────────────────────────────
@@ -164,11 +160,12 @@ async def _run_job(
                 loop,
             ).result(timeout=10)
 
-    pending_files = _pending_inbox_files.pop(channel_id, [])
+    # inbox の全ファイルを自動で渡す（明示的予約不要）
+    inbox_files = [f.name for f in list_inbox()]
 
     job: Job = await loop.run_in_executor(
         _thread_pool,
-        lambda: run_job(description, on_status=on_status, inbox_files=pending_files or None),
+        lambda: run_job(description, on_status=on_status, inbox_files=inbox_files or None),
     )
 
     if job.status == JobStatus.BLOCKED:
@@ -185,6 +182,15 @@ async def _run_job(
                 _thread_pool,
                 lambda: resume_job(job, approved=approved, on_status=on_status),
             )
+
+    # 完了したら output/ を outbox/ にコピー
+    if job.status == JobStatus.DONE:
+        from takumi.sandbox.workspace import get_workspace
+        ws = get_workspace(job.job_id)
+        if ws:
+            copied = copy_to_outbox(ws, job.job_id)
+            if copied:
+                log.info("Job %s: %d file(s) copied to outbox", job.job_id, len(copied))
 
     log.info("Job %s finished: status=%s", job.job_id, job.status.value)
 
@@ -208,76 +214,41 @@ async def _process_task_interaction(interaction: discord.Interaction, descriptio
 # ── inbox ヘルパー（共通）─────────────────────────────────────────────────────
 
 def _handle_files_list() -> str:
-    """inbox 一覧テキストを返す。"""
-    files = list_inbox()
-    if not files:
-        return f"📭 inbox は空です。\n`{INBOX_DIR}` にファイルを置いてください。"
-    names = "\n".join(f"  • `{f.name}`" for f in files)
-    return f"📂 **inbox** ({len(files)} files)\n{names}"
+    """inbox / outbox の一覧テキストを返す。"""
+    inbox = list_inbox()
+    inbox_text = (
+        "\n".join(f"  • `{f.name}`" for f in inbox)
+        if inbox else "  （空）"
+    )
 
+    outbox_files: list[str] = []
+    if OUTBOX_DIR.exists():
+        for job_dir in sorted(OUTBOX_DIR.iterdir()):
+            if job_dir.is_dir():
+                for f in sorted(job_dir.iterdir()):
+                    if f.is_file():
+                        outbox_files.append(f"`{job_dir.name}/{f.name}`")
+    outbox_text = "\n".join(f"  • {f}" for f in outbox_files) if outbox_files else "  （空）"
 
-def _handle_files_reserve(channel_id: int, filename: str) -> str:
-    """filename を予約してメッセージを返す。エラー時はエラーメッセージを返す。"""
-    if "/" in filename or "\\" in filename or ".." in filename:
-        return f"⚠️ 無効なファイル名: `{filename}`"
-    src = INBOX_DIR / filename
-    if not src.exists():
-        return f"❓ inbox に `{filename}` が見つかりません。"
-    if channel_id not in _pending_inbox_files:
-        _pending_inbox_files[channel_id] = []
-    if filename not in _pending_inbox_files[channel_id]:
-        _pending_inbox_files[channel_id].append(filename)
-    queued = _pending_inbox_files[channel_id]
-    names = ", ".join(f"`{f}`" for f in queued)
     return (
-        f"📎 `{filename}` を予約しました。\n"
-        f"予約中: {names}\n"
-        f"次の `/task` または `@Takumi <タスク>` で input/ にコピーされます。"
+        f"📥 **inbox** ({len(inbox)} files)\n{inbox_text}\n\n"
+        f"📤 **outbox**\n{outbox_text}\n\n"
+        f"inbox のファイルは次の `/task` 実行時に自動で渡されます。"
     )
 
 
 # ── Claude Code 認証フロー ──────────────────────────────────────────────────────
 
-def _restore_claude_config_if_needed() -> None:
-    """/root/.claude.json が欠けていればバックアップから復元する。
-
-    Docker volume は /root/.claude/（ディレクトリ）を永続化しているが、
-    /root/.claude.json（ファイル）は volume 外のためコンテナ再起動で消える。
-    /root/.claude/backups/ に残っている最新バックアップで補完する。
-    """
-    config = pathlib.Path("/root/.claude.json")
-    if config.exists():
-        return
-
-    backup_dir = pathlib.Path("/root/.claude/backups")
-    if not backup_dir.exists():
-        return
-
-    backups = sorted(backup_dir.glob(".claude.json.backup.*"))
-    if not backups:
-        log.info("claude config なし、バックアップも見つからず")
-        return
-
-    latest = backups[-1]
-    try:
-        shutil.copy2(latest, config)
-        log.info("claude config をバックアップから復元しました: %s → %s", latest, config)
-    except Exception as exc:
-        log.warning("claude config 復元失敗: %s", exc)
-
 
 async def _ensure_claude_auth() -> None:
-    """claude-code executor の認証状態を確認し、未認証なら手動認証手順を Discord に送信する。
+    """Claude Code executor の認証状態を確認し、未認証・期限切れなら Discord に通知する。
 
-    認証は `docker exec -it takumi-bot claude auth login` で一度だけ行う。
-    認証情報は Docker volume（claude_auth:/root/.claude）に永続化されるため、
-    コンテナ再起動後も再認証は不要。
+    認証情報はホスト側の scripts/sync_claude_auth.py（または start.sh）が
+    macOS Keychain から取得してコンテナへコピーする。
+    コンテナ側は認証状態を確認するのみ。
     """
     if os.environ.get("TAKUMI_EXECUTOR", "").lower() != "claude-code":
         return
-
-    # コンテナ再起動で /root/.claude.json が消えている場合にバックアップから復元
-    _restore_claude_config_if_needed()
 
     log.info("Claude Code executor: 認証状態を確認中…")
 
@@ -289,8 +260,7 @@ async def _ensure_claude_auth() -> None:
         log.info("Claude Code: 認証済み")
         return
 
-    # 未認証 → Discord に手順を通知（Bot はここで待機しない）
-    log.warning("Claude Code: 未認証。Discord に手動認証手順を送信します。")
+    log.warning("Claude Code: 未認証または期限切れ。ホストで同期スクリプトを実行してください。")
 
     channel_id = os.environ.get("DISCORD_AUTH_CHANNEL_ID")
     channel = bot.get_channel(int(channel_id)) if channel_id else None
@@ -314,17 +284,17 @@ async def _ensure_claude_auth() -> None:
 
     msg = (
         "🔐 **Claude Code の認証が必要です**\n\n"
-        "以下のコマンドをターミナルで実行してください:\n"
-        "```\ndocker exec -it takumi-bot claude auth login\n```\n"
-        "ブラウザで認証後、コードをターミナルに貼り付けると完了します。\n\n"
-        "認証完了後、bot を再起動してください:\n"
-        "```\ndocker compose restart\n```"
+        "ホスト（Mac）のターミナルで以下を実行してください:\n"
+        "```\npython3 scripts/sync_claude_auth.py\n```\n"
+        "macOS のキーチェーンアクセスダイアログが表示されます。\n"
+        "パスワードを入力すると認証情報がコンテナへ自動コピーされます。\n\n"
+        "次回からは `./start.sh` で起動すると自動的に同期されます。"
     )
     if channel:
         await channel.send(msg)
         log.info("Discord に認証手順を送信しました。")
     else:
-        log.warning("Discord チャンネルが見つかりません。手動で認証してください:\n%s", msg)
+        log.warning("Discord チャンネルが見つかりません:\n%s", msg)
 
 
 # ── イベント ──────────────────────────────────────────────────────────────────
@@ -414,15 +384,9 @@ async def slash_ping(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="files", description="inbox ファイル一覧 / 次のタスクにファイルを添付")
-@app_commands.describe(filename="添付するファイル名（省略すると一覧表示）")
-async def slash_files(interaction: discord.Interaction, filename: str | None = None):
-    channel_id = interaction.channel_id or 0
-    if filename is None:
-        await interaction.response.send_message(_handle_files_list())
-    else:
-        msg = _handle_files_reserve(channel_id, filename)
-        await interaction.response.send_message(msg)
+@bot.tree.command(name="files", description="inbox / outbox の一覧を表示")
+async def slash_files(interaction: discord.Interaction):
+    await interaction.response.send_message(_handle_files_list())
 
 
 # ── エントリポイント ───────────────────────────────────────────────────────────

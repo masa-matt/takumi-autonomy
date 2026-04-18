@@ -18,9 +18,10 @@ services:
       # inbox: ユーザーとのファイル受け渡し場所
       # Bot が .auth_code 等を書き込むこともあるため ro は外す
       - ./inbox:/app/inbox
+      - ./outbox:/app/outbox
       # Claude Code 認証情報を named volume で永続化
       # 初回起動時に Bot が Discord へ認証URLを送信するので、そこから認証する
-      - claude_auth:/root/.claude
+      - claude_auth:/home/takumi/.claude
 
     # ログをローテーションする
     logging:

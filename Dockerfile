@@ -26,6 +26,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY takumi/ takumi/
 COPY packages/ packages/
 
+# 非 root ユーザー（--dangerously-skip-permissions は root では使用不可のため）
+RUN useradd -m -u 1000 takumi \
+    && chown -R takumi:takumi /app
+
+USER takumi
+
 # job workspaces と inbox ディレクトリを作成（volume mount のマウントポイント）
 RUN mkdir -p takumi/jobs inbox
 
