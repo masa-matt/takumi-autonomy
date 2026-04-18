@@ -160,6 +160,14 @@ def _build_workspace_prompt(task: str, workspace) -> str:
    - 調査したこと、発見した問題、実施した修正、未解決の問題を書くこと
    - 次のアクション候補を含めること
 
+PR 支援（タスクが PR 作成・review 関連の場合）:
+- git diff または commit 履歴から PR タイトル案を生成すること（50字以内）
+- PR 本文案を生成すること（docs/templates/pr-body.md フォーマット参照）
+- review 観点を整理すること（セキュリティ・パフォーマンス・テスト・可読性・後方互換性等）
+- review コメント草案を生成する場合は具体的なファイル名・行番号を示すこと
+- 実際の PR 作成・push は**実行しないこと**（承認が必要）
+  → output/pr-draft.md に草案を保存して止まること
+
 複数リポジトリの比較（repos/ に repo が複数ある場合）:
 1. 各 repo を独立して把握する（技術スタック・ディレクトリ構造・主要設定・API 境界）
 2. 目的の観点（API / interface / config / 依存バージョン 等）で差分を比較する

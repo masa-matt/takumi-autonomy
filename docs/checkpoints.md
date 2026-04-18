@@ -161,17 +161,17 @@ Discord から依頼してジョブとして扱える状態にする。
 ### 目的
 PR を作る前段の実務を支援できる状態にする。
 
-### 通過条件
-- [ ] 差分から PR タイトル案を作れる
-- [ ] PR 本文案を作れる
-- [ ] review 観点を整理できる
-- [ ] PR review コメント草案を作れる
-- [ ] 実 PR 作成は承認境界の外にあると明示されている
+### 通過条件（**通過 2026-04-18**）
+- [x] 差分から PR タイトル案を作れる（プロンプト指示）
+- [x] PR 本文案を作れる（pr-body.md テンプレート参照）
+- [x] review 観点を整理できる（pr-review.md テンプレート）
+- [x] PR review コメント草案を作れる（ファイル・行番号付き）
+- [x] 実 PR 作成は承認境界の外にあると明示されている（runbook + prompt）
 
 ### 成果物
-- `docs/runbooks/pr-workflow.md`
-- `docs/templates/pr-body.md`
-- `docs/templates/pr-review.md`
+- `docs/runbooks/pr-workflow.md` ✅
+- `docs/templates/pr-body.md` ✅
+- `docs/templates/pr-review.md` ✅
 
 ### Git tag
 - `cp-lv2-07-pr-support`
