@@ -162,8 +162,12 @@ def _build_workspace_prompt(task: str, workspace) -> str:
 
 制約:
 - 作業ディレクトリ外には書き込まないこと
-- 成果物は output/ に保存すること
-- 完了したら output/result.md に要約を書くこと
+- 成果物（コード・ドキュメント等）は output/ に保存すること
+- 完了したら output/result.md に結果を書くこと
+  - Takumi として自然な話し言葉で書くこと
+  - Markdown のヘッダー（##等）や箇条書きは使わないこと
+  - 「要約」「受信メッセージ」「応答」などの形式的な見出しは書かないこと
+  - 短く、人間らしく書くこと
 
 タスク:
 {task}"""

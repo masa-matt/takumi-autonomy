@@ -67,6 +67,46 @@ def _task_slug(task: str, job_id: str) -> str:
     return f"{mmdd}-{slug}" if slug else mmdd
 
 
+# ── 雑談 vs タスクの判定 ──────────────────────────────────────────────────────
+
+_TASK_PATTERNS = re.compile(
+    r'作って|作成|つくって|生成|実装|修正|変更|調べ|確認|分析|まとめ|書いて|'
+    r'テスト|レビュー|クローン|clone|デバッグ|直して|調査|出力|作る|'
+    r'create|make|build|fix|check|analyze|review|write|generate|run|execute',
+    re.IGNORECASE,
+)
+
+
+def _is_task(text: str) -> bool:
+    """メッセージが作業依頼かどうかをヒューリスティックで判定する。"""
+    return bool(_TASK_PATTERNS.search(text))
+
+
+def _run_chat_reply(text: str) -> str:
+    """SOUL.md の人格で雑談に短く返す（ジョブなし・サンドボックスなし）。"""
+    from takumi.discord.job_runner import _load_soul
+    soul = _load_soul()
+    prompt = (
+        f"{soul}\n\n"
+        "---\n\n"
+        "以下のメッセージに、Takumi として自然に短く返してください。\n"
+        "Markdown のヘッダーや箇条書きは使わないこと。一言〜二文で返すこと。\n\n"
+        f"メッセージ: {text}"
+    )
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--dangerously-skip-permissions"],
+            capture_output=True, text=True, timeout=30,
+        )
+        reply = result.stdout.strip()
+        # --output-format json なしなので plain text が返る
+        if result.returncode == 0 and reply:
+            return reply
+    except Exception:
+        pass
+    return "ちょっと調子悪い、後で試して"
+
+
 # ── ステータス表示 ─────────────────────────────────────────────────────────────
 
 _STATUS_ICON = {
@@ -253,18 +293,39 @@ async def _run_job(
 
 
 async def _process_task_mention(message: discord.Message, description: str) -> None:
-    """@メンション経由のタスク処理。"""
+    """@メンション経由のタスク処理。雑談は即返答、作業依頼はジョブ実行。"""
+    if not _is_task(description):
+        reply = await loop_run(_run_chat_reply, description)
+        await message.reply(reply)
+        return
     status_msg = await message.reply("受け取った、少し待って")
     await _run_job(status_msg, description, chat_mode=True)
 
 
 async def _process_task_channel(message: discord.Message, description: str) -> None:
-    """タスクチャンネルでの自然言語メッセージ処理。スレッドを作って返す。"""
+    """タスクチャンネルでの自然言語メッセージ処理。
+
+    作業依頼 → スレッドを作ってジョブ実行
+    雑談     → その場で一言返す（ジョブなし）
+    """
+    if not _is_task(description):
+        # 雑談: スレッドを立てず、その場で返す
+        reply = await loop_run(_run_chat_reply, description)
+        await message.reply(reply)
+        return
+
+    # 作業依頼: スレッドを作ってジョブ実行
     slug = re.sub(r'[^\w\u3040-\u30ff\u4e00-\u9fff]+', '-', description, flags=re.UNICODE)
     thread_name = slug.strip('-')[:80] or "task"
     thread = await message.create_thread(name=thread_name, auto_archive_duration=60)
     status_msg = await thread.send("受け取った、少し待って")
     await _run_job(status_msg, description, chat_mode=True)
+
+
+async def loop_run(fn, *args):
+    """同期関数をスレッドプールで実行する。"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_thread_pool, lambda: fn(*args))
 
 
 async def _process_task_interaction(interaction: discord.Interaction, description: str) -> None:
