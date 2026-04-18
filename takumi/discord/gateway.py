@@ -292,6 +292,16 @@ async def _run_job(
     log.info("Job %s finished: status=%s", job.job_id, job.status.value)
 
 
+async def _process_thread_message(message: discord.Message, description: str) -> None:
+    """タスクチャンネルのスレッド内での会話を継続する。"""
+    if not _is_task(description):
+        reply = await loop_run(_run_chat_reply, description)
+        await message.reply(reply)
+        return
+    status_msg = await message.reply("受け取った、少し待って")
+    await _run_job(status_msg, description, chat_mode=True)
+
+
 async def _process_task_mention(message: discord.Message, description: str) -> None:
     """@メンション経由のタスク処理。雑談は即返答、作業依頼はジョブ実行。"""
     if not _is_task(description):
@@ -438,8 +448,14 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # スレッド内のメッセージは無視（Bot が作ったスレッド内での追加メッセージ）
+    # スレッド内のメッセージ
     if isinstance(message.channel, discord.Thread):
+        parent_id = message.channel.parent_id
+        if _TASK_CHANNEL_IDS and parent_id in _TASK_CHANNEL_IDS:
+            description = message.content.strip()
+            if description:
+                await _process_thread_message(message, description)
+            return
         await bot.process_commands(message)
         return
 
