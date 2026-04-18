@@ -1,82 +1,79 @@
 # Handoff
 
 ## Session Goal
-Claude Code executor を Docker コンテナ内で OAuth 認証し、Discord からタスクを実行できる状態にする（CP-02 PoC 完了）
+Hermes Recall / Save を V2 に統合し、CP-04 の実装を完了する。
 
 ## Current Checkpoint
-CP-LV2-02 Discord 受付とジョブ状態管理 — **PoC 通過**
+CP-LV2-04 Hermes Recall / Save 統合 — **実装完了、Discord テスト待ち**
 
 ## Context Read
 - `.claude/CLAUDE.md`
 - `docs/checkpoints.md`
 - `docs/current-milestone.md`
+- `docs/handoff.md`（前回）
 
 ## Done
 
-### 認証基盤（新規）
-- `scripts/sync_claude_auth.py`: macOS Keychain → コンテナへの OAuth 認証情報同期スクリプト
-  - 有効期限チェック → 期限内はスキップ
-  - 期限切れ → リフレッシュトークンで自動更新（`https://platform.claude.com/v1/oauth/token`）
-  - リフレッシュ失敗 → Keychain アクセス（パスワードダイアログ）でフォールバック
-- `start.sh`: `docker compose build && up && sync_claude_auth.py` を一括実行
+### CP-00/01/02 完了マーク
+- `docs/checkpoints.md`: CP-00/01/02 の通過条件をすべて `[x]` に更新（通過日 2026-04-18）
 
-### Dockerfile / docker-compose
-- 非 root ユーザー `takumi` (UID 1000) を追加（`--dangerously-skip-permissions` が root 禁止のため）
-- `claude_auth` volume のマウント先を `/root/.claude` → `/home/takumi/.claude` に変更
-- `./outbox:/app/outbox` volume を追加
+### takumi/hermes/ 作成（新規）
+- `takumi/hermes/__init__.py`: `search_sessions`, `write_memory`, `create_skill_draft`, `search_skills` をエクスポート
+- `takumi/hermes/models.py`: MemoryEntry / SearchHit / SearchResult / SaveResult / Skill / SkillResult（外部依存なし）
+- `takumi/hermes/memory.py`: V1 `memory_api.py` + `session_search_api.py` を V2 Job 型に適合させて移植
+  - ストレージ: `runtime/memory/entries/*.json`（`HERMES_ENTRIES_DIR` env で上書き可）
+  - センシティブパターンガード（token / password / secret 等）
+  - キーワード Jaccard スコアで上位 3 件を返す
+- `takumi/hermes/skill.py`: V1 `skill_api.py` を V2 Job 型に適合させて移植
+  - ストレージ: `runtime/memory/skills/*.json`（`HERMES_SKILLS_DIR` env で上書き可）
+  - DRAFT → APPROVED の承認フロー（まだ Discord コマンド未接続）
 
-### Discord → Claude Code パイプライン修正
-- `claude --print <prompt>` → `claude -p <prompt>` に修正（`--print` は入力待機しない）
-- `--dangerously-skip-permissions` を追加（非 root 環境で有効）
-- inbox auto-include: タスク実行時に inbox の全ファイルを自動で `input/` へ（明示予約廃止）
-- outbox auto-copy: job 完了時に `output/` を `outbox/<job_id>/` へ自動コピー
-- `/files` コマンド: 予約機能廃止 → inbox / outbox の両方を一覧表示
+### job_runner.py に Recall / Save を統合
+- `_build_recall_context(task)`: `search_sessions` + `search_skills` を呼び、プロンプトに注入するテキストを生成
+- `_build_workspace_prompt()`: Recall セクションを追加（ヒット 0 件の場合は省略）
+- `_save(job, output, danger_level)`: job 完了後に `write_memory` + `create_skill_draft` を呼ぶ
+  - `run_job`: auto_allow パスで `_save(job, output, danger)` を呼ぶ
+  - `resume_job`: 承認後実行パスで `_save(job, output, "approval_required")` を呼ぶ
+  - 例外は WARNING でログに落とすだけ（Hermes 失敗で job 失敗にしない）
 
-### 判明した制約（重要）
-- `claude auth login` はコンテナ（Linux）で stdin を待機せずに即 exit 0 する設計
-  → ブラウザコールバックはローカル HTTP サーバー前提（Linux 非 GUI 環境では機能しない）
-  → 対応策: Keychain からの直接コピー + リフレッシュトークンによる自動更新
+### docker-compose.yml
+- `./runtime:/app/runtime` volume を追加（コンテナ再起動後もメモリが保持される）
 
 ## Not Done
-- `docs/runbooks/discord-ops.md`（CP-02 成果物）
-- BLOCKED 状態の承認フローの実 PoC（実装済み、未テスト）
-- Hermes Recall / Save 統合（CP-04）
+- Discord で `/task 前やったこと覚えてる？` を実際にテストして CP-04 通過確認
+- skill approve/reject の Discord コマンド
+- `docs/runbooks/hermes-bridge.md`（CP-04 成果物）
 - Repo clone・取り込みフロー（CP-03）
+- CP-05: 単一 repo 調査・修正・検証
 
 ## Files Changed
-- `Dockerfile` — 非 root ユーザー追加
-- `docker-compose.yml` — outbox volume、claude_auth マウント先変更
-- `takumi/discord/gateway.py` — inbox auto-include、outbox auto-copy、/files 簡素化、auth フロー更新
-- `takumi/discord/job_runner.py` — `claude -p <prompt>` 修正、`--dangerously-skip-permissions` 追加
-- `takumi/sandbox/ingress.py` — `OUTBOX_DIR`、`copy_all_inbox()`、`copy_to_outbox()` 追加
-- `scripts/sync_claude_auth.py` — 新規: Keychain 同期 + トークンリフレッシュ
-- `start.sh` — 新規: 起動ワンライナー
+- `docs/checkpoints.md` — CP-00/01/02 を通過済みに更新
+- `docs/current-milestone.md` — CP-04 に更新
+- `takumi/hermes/__init__.py` — 新規
+- `takumi/hermes/models.py` — 新規
+- `takumi/hermes/memory.py` — 新規
+- `takumi/hermes/skill.py` — 新規
+- `takumi/discord/job_runner.py` — Recall 注入、Save 呼び出し、_build_recall_context 追加
+- `docker-compose.yml` — runtime volume 追加
 
-## Validation
-- `docker exec takumi-bot claude auth status` → `loggedIn: true` ✅
-- `/task 元気？` → done、result.md が Discord に返る ✅
-- `/task hello.py を output/ に作成して` → done、`takumi/jobs/<id>/output/hello.py` 生成 ✅
-- `/files` → `/task 添付ファイルを読んで要約して` → inbox の PDF が自動で input/ に渡る ✅
-- トークン期限切れ時の自動リフレッシュ ✅
+## Validation（次回起動で確認すること）
+1. `docker compose up -d --build` → コンテナ起動
+2. `/task 元気？` → job done、`runtime/memory/entries/mem-*.json` が生成される
+3. `/task 前やったこと覚えてる？` → プロンプトに Recall セクションが含まれる（コンテナログで確認）
+4. `ls runtime/memory/entries/` → エントリが増えている
 
 ## Risks / Concerns
-- OAuth トークンのリフレッシュエンドポイント・Client ID はバイナリから逆引き（公式未文書）
-  → Claude Code のバージョンアップで変わる可能性あり
-- `--dangerously-skip-permissions` は sandbox 境界（`--add-dir`）に依存して安全性を担保している
-  → `--add-dir` の指定が正しくないと sandbox 外への書き込みが可能になる
-
-## Approval Needed
-- 次 checkpoint 以降の本格実装前に Hermes 連携設計の確認
-
-## Memory Candidates
-- `claude auth login` は Linux コンテナで stdin を待機しない（設計上の制約）
-- リフレッシュエンドポイント: `https://platform.claude.com/v1/oauth/token`、Client ID: `9d1c250a-e61b-44d9-88ed-5944d1962f5e`
-- `--dangerously-skip-permissions` は root では使用不可（Claude Code のセキュリティ制約）
-
-## Skill Candidates
-- `sync_claude_auth`: macOS Keychain → Docker コンテナへの Claude Code OAuth 同期
+- `runtime/` をホスト側マウントにしたため、コンテナ内の `takumi` ユーザー（UID 1000）が書き込めるか要確認
+  → `chown -R 1000:1000 runtime/` を必要に応じてホストで実行
 
 ## Suggested Next Step
-1. `docs/runbooks/discord-ops.md` を作成して CP-02 成果物を整える
-2. BLOCKED フロー（承認待ち → approve/reject）を実際に Discord でテスト
-3. CP-03: inbox からのファイル取り込み + repo clone フローの実装・検証
+1. `./start.sh` でコンテナを再起動してビルドを反映
+2. Discord で `/task 元気？` → エントリ生成を確認
+3. Discord で `/task 前やったこと覚えてる？` → Recall が効くか確認 → CP-04 通過
+4. `docs/runbooks/hermes-bridge.md` を作成して CP-04 成果物を整える
+
+## Memory Candidates
+- `takumi/hermes/` のストレージパスは env var で差し替え可能（`HERMES_ENTRIES_DIR` / `HERMES_SKILLS_DIR`）
+- Recall は job_runner の `_build_workspace_prompt()` でプロンプトに注入される
+- Save は `_save()` が `run_job` / `resume_job` 完了時に呼ばれる（例外は WARNING のみ）
+- `runtime/` をコンテナにマウントするため、ホスト側のパーミッション確認が必要な場合がある

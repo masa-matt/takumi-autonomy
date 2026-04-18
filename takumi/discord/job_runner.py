@@ -13,9 +13,10 @@ import logging
 import os
 import re
 import subprocess
-from typing import Callable
+from typing import Callable, Optional
 
 from takumi.core.job_state import Job, JobStatus, create_job
+from takumi.hermes import search_sessions, search_skills, write_memory, create_skill_draft
 from takumi.sandbox.ingress import copy_from_inbox
 from takumi.sandbox.workspace import get_workspace
 
@@ -92,19 +93,45 @@ def _execute(job: Job) -> str:
         raise RuntimeError(f"API error: {exc}") from exc
 
 
-def _build_workspace_prompt(task: str, workspace) -> str:
-    """workspace context を含むプロンプトを生成する。
+def _build_recall_context(task: str) -> str:
+    """過去セッションとスキルを検索してコンテキスト文字列を返す。"""
+    try:
+        mem_result = search_sessions(task, top_k=3)
+        skill_hits = search_skills(task, top_k=3)
+    except Exception:
+        return ""
 
-    Claude Code が workspace 内に閉じて作業するよう指示する。
-    """
+    lines = []
+
+    if mem_result.hits:
+        lines.append("## 過去の関連セッション")
+        for h in mem_result.hits:
+            summary = (h.output_summary or "").replace("\n", " ")[:200]
+            lines.append(f"- [{h.saved_at[:10]}] {h.task[:80]}")
+            if summary:
+                lines.append(f"  結果: {summary}")
+
+    if skill_hits:
+        lines.append("## 関連スキル")
+        for s in skill_hits:
+            lines.append(f"- {s['name']}: {s.get('procedure_summary', '')[:200]}")
+
+    return "\n".join(lines)
+
+
+def _build_workspace_prompt(task: str, workspace) -> str:
+    """workspace context と Recall 結果を含むプロンプトを生成する。"""
     input_files = list(workspace.input.iterdir()) if workspace.input.exists() else []
     input_list = "\n".join(f"    - {f.name}" for f in input_files) or "    （なし）"
 
     repos = list(workspace.repos.iterdir()) if workspace.repos.exists() else []
     repos_list = "\n".join(f"    - {r.name}" for r in repos) or "    （なし）"
 
-    return f"""あなたは以下の作業ディレクトリ内で作業してください。
+    recall = _build_recall_context(task)
+    recall_section = f"\n## Recall（過去の記憶）\n{recall}\n" if recall else ""
 
+    return f"""あなたは以下の作業ディレクトリ内で作業してください。
+{recall_section}
 作業ディレクトリ: {workspace.path}
 
 ディレクトリ構造:
@@ -241,13 +268,15 @@ def run_job(
     job.transition(JobStatus.RUNNING)
     _notify(job, on_status)
 
+    output: Optional[str] = None
     try:
-        result = _execute(job)
-        job.transition(JobStatus.DONE, result_summary=result[:500])
+        output = _execute(job)
+        job.transition(JobStatus.DONE, result_summary=output[:500])
     except Exception as exc:
         job.transition(JobStatus.FAILED, error=str(exc))
 
     _notify(job, on_status)
+    _save(job, output, danger)
     return job
 
 
@@ -269,14 +298,35 @@ def resume_job(job: Job, approved: bool, on_status: Callable[[Job], None] | None
     job.transition(JobStatus.RUNNING)
     _notify(job, on_status)
 
+    output: Optional[str] = None
     try:
-        result = _execute(job)
-        job.transition(JobStatus.DONE, result_summary=result[:500])
+        output = _execute(job)
+        job.transition(JobStatus.DONE, result_summary=output[:500])
     except Exception as exc:
         job.transition(JobStatus.FAILED, error=str(exc))
 
     _notify(job, on_status)
+    _save(job, output, "approval_required")
     return job
+
+
+def _save(job: Job, output: Optional[str], danger_level: str) -> None:
+    """job 完了後に memory と skill draft を保存する。"""
+    try:
+        mem_result = write_memory(job, output, danger_level)
+        if mem_result.saved:
+            log.info("Hermes: memory saved — %s", mem_result.entry_id)
+        else:
+            log.debug("Hermes: memory skip — %s", mem_result.skip_reason)
+    except Exception as exc:
+        log.warning("Hermes write_memory failed: %s", exc)
+
+    try:
+        skill_result = create_skill_draft(job, output)
+        if skill_result.created:
+            log.info("Hermes: skill draft created — %s", skill_result.skill_id)
+    except Exception as exc:
+        log.warning("Hermes create_skill_draft failed: %s", exc)
 
 
 def _notify(job: Job, on_status: Callable[[Job], None] | None) -> None:

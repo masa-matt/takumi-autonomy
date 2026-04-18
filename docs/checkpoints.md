@@ -5,14 +5,14 @@
 ### 目的
 V2 の設計境界を固定する。
 
-### 通過条件
-- [ ] ローカル版の目的が明文化されている
-- [ ] ホストと sandbox の役割分離が明記されている
-- [ ] Discord / Core / Hermes / Claude Code / Sandbox の責務が明記されている
-- [ ] IAM が必要なログ調査がスコープ外であると明記されている
-- [ ] 危険操作・承認原則・停止条件が明文化されている
-- [ ] MOR / PRR / PCR と sandbox 境界観測の方針が定義されている
-- [ ] `.claude/CLAUDE.md` の V2 初版がある
+### 通過条件（**通過 2026-04-18**）
+- [x] ローカル版の目的が明文化されている
+- [x] ホストと sandbox の役割分離が明記されている
+- [x] Discord / Core / Hermes / Claude Code / Sandbox の責務が明記されている
+- [x] IAM が必要なログ調査がスコープ外であると明記されている
+- [x] 危険操作・承認原則・停止条件が明文化されている
+- [x] MOR / PRR / PCR と sandbox 境界観測の方針が定義されている
+- [x] `.claude/CLAUDE.md` の V2 初版がある
 
 ### 成果物
 - `docs/project-charter.md`
@@ -30,12 +30,12 @@ V2 の設計境界を固定する。
 ### 目的
 1ジョブ1sandbox を作れる状態にする。
 
-### 通過条件
-- [ ] job id ごとに workspace を作成できる
-- [ ] `input/`, `repos/`, `output/`, `logs/`, `state/` が分離される
-- [ ] 書き込み範囲が job 配下に限定される
-- [ ] job 完了後に成果物とログを回収できる
-- [ ] sandbox 境界の想定が文書化されている
+### 通過条件（**通過 2026-04-18**）
+- [x] job id ごとに workspace を作成できる
+- [x] `input/`, `repos/`, `output/`, `logs/`, `state/` が分離される
+- [x] 書き込み範囲が job 配下に限定される
+- [x] job 完了後に成果物とログを回収できる
+- [x] sandbox 境界の想定が文書化されている
 
 ### 成果物
 - `takumi/sandbox/`
@@ -52,12 +52,12 @@ V2 の設計境界を固定する。
 ### 目的
 Discord から依頼してジョブとして扱える状態にする。
 
-### 通過条件
-- [ ] Discord から自然言語で依頼を受け取れる
-- [ ] job id を採番できる
-- [ ] job 状態を最低限 `queued / running / blocked / done / failed` で管理できる
-- [ ] 中間報告を返せる
-- [ ] 承認待ちメッセージを送れる
+### 通過条件（**通過 2026-04-18**）
+- [x] Discord から自然言語で依頼を受け取れる
+- [x] job id を採番できる
+- [x] job 状態を最低限 `queued / running / blocked / done / failed` で管理できる
+- [x] 中間報告を返せる
+- [x] 承認待ちメッセージを送れる
 
 ### 成果物
 - `takumi/discord/`

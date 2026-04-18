@@ -19,6 +19,8 @@ services:
       # Bot が .auth_code 等を書き込むこともあるため ro は外す
       - ./inbox:/app/inbox
       - ./outbox:/app/outbox
+      # Hermes memory / skill ストレージ（ジョブをまたいで記憶を永続化）
+      - ./runtime:/app/runtime
       # Claude Code 認証情報を named volume で永続化
       # 初回起動時に Bot が Discord へ認証URLを送信するので、そこから認証する
       - claude_auth:/home/takumi/.claude
