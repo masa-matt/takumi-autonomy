@@ -74,12 +74,12 @@ Discord から依頼してジョブとして扱える状態にする。
 ### 目的
 ローカルファイルと複数 repo を sandbox に安全に取り込める状態にする。
 
-### 通過条件（**部分完了** — repo clone 未連携）
+### 通過条件（**通過 2026-04-18**）
 - [x] ローカルファイルを sandbox の `input/` にコピーできる（inbox 経由）
-- [ ] 1つ以上の repo を sandbox に clone できる（`clone_repo()` 実装済み・Discord 未連携）
-- [ ] 複数 repo を job 内で扱える
-- [x] 元 repo の直編集を避ける設計になっている（clone-in 方式）
-- [ ] repo / file の取り込みルールが文書化されている
+- [x] 1つ以上の repo を sandbox に clone できる（Claude Code がプロンプト指示に従い repos/ にクローン）
+- [x] 複数 repo を job 内で扱える（repos/ 以下に複数 clone 可能）
+- [x] 元 repo の直編集を避ける設計になっている（clone-in / sandbox 境界）
+- [x] repo / file の取り込みルールが文書化されている（`docs/runbooks/repo-and-file-ingress.md`）
 
 ### 成果物
 - `takumi/core/input_ingress.*`

@@ -10,21 +10,19 @@ Phase 1: ローカル sandbox 足場
 - CP-04 Hermes Recall / Save 統合 — ✅ PoC 通過（2026-04-18）
 
 ## 現在の checkpoint
-CP-LV2-03 Repo / File 取り込み — **部分完了、repo clone 連携が残り**
+CP-LV2-03 Repo / File 取り込み — **PoC 通過（2026-04-18）**
 
 ## 達成状況
 - [x] ローカルファイルを inbox 経由で sandbox に渡せる
 - [x] outbox で成果物を受け取れる（result.md 除外・スラグ名）
 - [x] `clone_repo()` / `clone_local_repo()` の実装（`takumi/sandbox/ingress.py`）
-- [ ] Discord からタスク内の URL を検出して自動クローン
-- [ ] repo / file 取り込みルールの文書化
+- [x] プロンプトに「URL があれば repos/ にクローンして作業」を追加
+- [x] `docs/runbooks/repo-and-file-ingress.md` 作成
 
-## 残タスク（CP-03 通過まで）
-1. プロンプトに「URL があれば repos/ にクローンして作業」を追加（Claude Code 任せ方式）
-2. `docs/runbooks/repo-and-file-ingress.md` 作成
+## 次の checkpoint
+CP-LV2-05 単一 repo 調査・修正・検証
 
 ## その後
-- CP-05: 単一 repo 調査・修正・検証
 - CP-06: 複数 repo 比較
 - CP-07: PR 本文案・Review
 - CP-08: 承認境界・停止条件・handoff 運用
