@@ -22,8 +22,13 @@ Phase 1 全チェックポイント通過。実運用継続 + V3 設計フェー
 **Goal**: 単一 Takumi アイデンティティ + 共有 Hermes ブレイン + スレッド単位のセッション継続
 詳細: [docs/v3-vision.md](./v3-vision.md)
 
-最初の一歩（Phase 2.1）: スレッド = セッション化してワークスペースを再利用する
-（現状の UX 問題「スレッド内で前の repo を忘れる」を直接解決）
+### 実装フェーズ別設計書（実装者向け）
+- [Phase 2.1 Thread = Session](./designs/phase-2.1-thread-as-session.md) — 最優先。UX 問題を直接解決
+- [Phase 2.2 Repo Structure Cache](./designs/phase-2.2-repo-structure-cache.md)
+- [Phase 2.3 Skill Auto-Injection](./designs/phase-2.3-skill-auto-injection.md)
+- [Phase 2.4 Long-term Distillation](./designs/phase-2.4-long-term-distillation.md)
+- [Phase 2.5 Parallel Sessions](./designs/phase-2.5-parallel-sessions.md)
+- [設計書一覧 README](./designs/README.md)
 
 ## 残タスク（V2 スコープ）
 - Hermes skill 承認フロー（approve/reject コマンド）
