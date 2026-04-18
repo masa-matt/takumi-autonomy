@@ -305,19 +305,19 @@ async def _process_task_mention(message: discord.Message, description: str) -> N
 async def _process_task_channel(message: discord.Message, description: str) -> None:
     """タスクチャンネルでの自然言語メッセージ処理。
 
-    作業依頼 → スレッドを作ってジョブ実行
-    雑談     → その場で一言返す（ジョブなし）
+    常にスレッドを作り、その中で雑談/タスクを処理する。
     """
+    slug = re.sub(r'[^\w\u3040-\u30ff\u4e00-\u9fff]+', '-', description, flags=re.UNICODE)
+    thread_name = slug.strip('-')[:80] or "chat"
+    thread = await message.create_thread(name=thread_name, auto_archive_duration=60)
+
     if not _is_task(description):
-        # 雑談: スレッドを立てず、その場で返す
+        # 雑談: スレッド内で SOUL 人格として返す
         reply = await loop_run(_run_chat_reply, description)
-        await message.reply(reply)
+        await thread.send(reply)
         return
 
-    # 作業依頼: スレッドを作ってジョブ実行
-    slug = re.sub(r'[^\w\u3040-\u30ff\u4e00-\u9fff]+', '-', description, flags=re.UNICODE)
-    thread_name = slug.strip('-')[:80] or "task"
-    thread = await message.create_thread(name=thread_name, auto_archive_duration=60)
+    # 作業依頼: スレッド内でジョブ実行
     status_msg = await thread.send("受け取った、少し待って")
     await _run_job(status_msg, description, chat_mode=True)
 

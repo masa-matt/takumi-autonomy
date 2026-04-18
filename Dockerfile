@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # V2 ソースをコピー
 COPY takumi/ takumi/
 COPY packages/ packages/
+COPY docs/ docs/
 
 # 非 root ユーザー（--dangerously-skip-permissions は root では使用不可のため）
 RUN useradd -m -u 1000 takumi \
