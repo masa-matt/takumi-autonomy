@@ -105,8 +105,8 @@ Discord から依頼してジョブとして扱える状態にする。
 
 ### 成果物
 - `takumi/hermes/` ✅（models / memory / skill）
-- `docs/runbooks/hermes-bridge.md`（未作成）
-- `docs/metrics.md`（未作成）
+- `docs/runbooks/hermes-bridge.md` ✅
+- `docs/metrics.md` ✅
 
 ### Git tag
 - `cp-lv2-04-hermes-bridge`
