@@ -118,17 +118,17 @@ Discord から依頼してジョブとして扱える状態にする。
 ### 目的
 1つの repo に対する実務的な調査と修正を回せる状態にする。
 
-### 通過条件
-- [ ] 単一 repo の構造調査ができる
-- [ ] failing test / lint の原因調査ができる
-- [ ] 最小差分で修正できる
-- [ ] test / lint / diff を報告できる
-- [ ] handoff を残せる
+### 通過条件（**通過 2026-04-18**）
+- [x] 単一 repo の構造調査ができる
+- [x] failing test / lint の原因調査ができる
+- [x] 最小差分で修正できる
+- [x] test / lint / diff を報告できる
+- [x] handoff を残せる
 
 ### 成果物
-- `takumi/core/executor_adapter.*`
-- `docs/runbooks/single-repo-workflow.md`
-- `docs/examples/`
+- `takumi/core/executor_adapter.py` ✅
+- `docs/runbooks/single-repo-workflow.md` ✅
+- `docs/examples/single-repo-investigation.md` ✅
 
 ### Git tag
 - `cp-lv2-05-single-repo-flow`

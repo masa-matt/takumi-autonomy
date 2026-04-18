@@ -8,13 +8,13 @@ Executor の選択（TAKUMI_EXECUTOR 環境変数）:
   （未設定 or 空）ANTHROPIC_API_KEY があれば api、なければスタブ
 """
 
-import json
 import logging
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Callable, Optional
+
+from takumi.core import executor_adapter
 
 _SOUL_MD = Path(__file__).parent.parent.parent / "docs" / "SOUL.md"
 
@@ -73,34 +73,9 @@ def _classify(task: str) -> str:
 # ── 実行（スタブ / Anthropic API / Claude Code CLI）──────────────────────────
 
 def _execute(job: Job) -> str:
-    """job.task を実行して結果文字列を返す。
-
-    TAKUMI_EXECUTOR 環境変数でバックエンドを選択:
-      claude-code  → Claude Code CLI（定額プラン / claude コマンド必要）
-      api          → Anthropic API（ANTHROPIC_API_KEY 必要）
-      （未設定）    → API key があれば api、なければスタブ
-    """
-    executor = os.environ.get("TAKUMI_EXECUTOR", "").lower()
-
-    if executor == "claude-code":
-        return _execute_claude_code(job)
-
-    # api モード（executor == "api" or 未設定）
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return f"[STUB] タスクを受け付けました: {job.task}"
-
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": job.task}],
-        )
-        return msg.content[0].text if msg.content else "(no output)"
-    except Exception as exc:
-        raise RuntimeError(f"API error: {exc}") from exc
+    """job.task を executor_adapter 経由で実行して結果文字列を返す。"""
+    workspace = get_workspace(job.job_id)
+    return executor_adapter.execute(job, workspace)
 
 
 def _build_recall_context(task: str) -> str:
@@ -174,66 +149,19 @@ def _build_workspace_prompt(task: str, workspace) -> str:
 - すでに repos/ にクローン済みであれば再クローンしないこと
 - 元のリポジトリを直接 push / 編集依頼の送信はしないこと（sandbox 内で完結させること）
 
+リポジトリ調査・修正の手順（repos/ に repo がある場合）:
+1. repo 構造を把握する（README, package.json / pyproject.toml / go.mod / Makefile 等を確認）
+2. テストと lint の現状を実行して確認する（make test, pytest, npm test, go test ./... 等）
+3. failing test / lint があれば原因を特定する
+4. 最小差分で修正する（関係ない箇所は変えない）
+5. 修正後に再度テスト・lint を実行して確認する
+6. 変更がある場合は `git diff` を output/changes.diff に保存すること
+7. output/handoff.md に調査・修正のサマリーを残すこと
+   - 調査したこと、発見した問題、実施した修正、未解決の問題を書くこと
+   - 次のアクション候補を含めること
+
 タスク:
 {task}"""
-
-
-def _execute_claude_code(job: Job) -> str:
-    """Claude Code CLI でタスクを sandbox 内で実行する（定額プラン対応）。
-
-    事前条件:
-      - `claude` コマンドが PATH にあること
-      - `claude auth login` 済みで Max/Pro プランのアカウントであること
-
-    sandbox への閉じ込め:
-      - `--cwd workspace/` で作業ディレクトリを sandbox に設定
-      - `--add-dir workspace/` でファイルアクセスを sandbox 内に限定
-      - プロンプトで output/ への書き出しを明示
-    """
-    workspace = get_workspace(job.job_id)
-    if workspace is None:
-        raise RuntimeError(f"workspace が見つかりません: {job.job_id}")
-
-    prompt = _build_workspace_prompt(job.task, workspace)
-
-    try:
-        result = subprocess.run(
-            [
-                "claude", "-p", prompt,
-                "--output-format", "json",
-                "--add-dir", str(workspace.path),
-                "--dangerously-skip-permissions",
-            ],
-            cwd=str(workspace.path),   # subprocess の作業ディレクトリを workspace に設定
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except FileNotFoundError:
-        raise RuntimeError(
-            "claude CLI が見つかりません。Claude Code をインストールして `claude auth login` を実行してください。"
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("タスクがタイムアウトしました（300秒）。")
-
-    if result.returncode != 0:
-        raise RuntimeError(f"claude CLI エラー: {result.stderr[:500]}")
-
-    # --output-format json の場合 {"result": "..."} 形式で返ってくる
-    try:
-        data = json.loads(result.stdout)
-        text = data.get("result") or data.get("content") or result.stdout.strip()
-    except (json.JSONDecodeError, AttributeError):
-        text = result.stdout.strip() or "(no output)"
-
-    # output/result.md があれば優先して返す
-    result_md = workspace.output / "result.md"
-    if result_md.exists():
-        md_content = result_md.read_text(encoding="utf-8").strip()
-        if md_content:
-            return md_content
-
-    return text
 
 
 # ── パイプライン ──────────────────────────────────────────────────────────────
