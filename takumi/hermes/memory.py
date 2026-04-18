@@ -29,7 +29,7 @@ _SENSITIVE_PATTERNS = [
 ]
 
 _STOP_WORDS = {"", "the", "a", "an", "to", "in", "of", "for", "and", "or", "is", "it",
-               "が", "を", "は", "に", "の", "で", "と", "も", "から", "まで"}
+               "が", "を", "は", "に", "の", "で", "と", "も", "から", "まで", "する", "した", "ある", "いる"}
 
 
 # ── Save ──────────────────────────────────────────────────────────────────────
@@ -69,45 +69,73 @@ def write_memory(job, output: Optional[str], danger_level: str = "auto_allow") -
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
-def search_sessions(query: str, top_k: int = 3) -> SearchResult:
-    """過去メモリエントリをキーワードマッチで検索する。"""
+def search_sessions(query: str, top_k: int = 3, recent_always: int = 3) -> SearchResult:
+    """過去メモリエントリをキーワードマッチで検索する。
+
+    キーワードマッチに加えて、直近 recent_always 件を常に含める。
+    日本語のように単語分割が難しい言語でもコンテキストが途切れないようにする。
+    """
     _ENTRIES_DIR.mkdir(parents=True, exist_ok=True)
 
-    entry_files = sorted(_ENTRIES_DIR.glob("*.json"))
+    # 新しい順にソート（ファイル名に日付が含まれる）
+    entry_files = sorted(_ENTRIES_DIR.glob("*.json"), reverse=True)
     total_searched = len(entry_files)
 
-    if not entry_files or not query.strip():
+    if not entry_files:
         return SearchResult(query=query, hits=[], total_searched=total_searched)
 
-    query_tokens = _tokenize(query)
-    if not query_tokens:
-        return SearchResult(query=query, hits=[], total_searched=total_searched)
-
-    hits: list[SearchHit] = []
+    # 直近エントリを日付降順で取得
+    recent_entries: list[dict] = []
     for path in entry_files:
+        if len(recent_entries) >= recent_always:
+            break
         try:
-            entry = json.loads(path.read_text(encoding="utf-8"))
+            recent_entries.append(json.loads(path.read_text(encoding="utf-8")))
         except Exception:
             continue
 
-        text = f"{entry.get('task', '')} {entry.get('output_summary') or ''}"
-        text_tokens = _tokenize(text)
-        overlap = len(query_tokens & text_tokens)
-        if overlap == 0:
-            continue
+    # キーワードマッチ
+    keyword_hits: list[SearchHit] = []
+    query_tokens = _tokenize(query)
+    if query_tokens:
+        for path in entry_files:
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            text = f"{entry.get('task', '')} {entry.get('output_summary') or ''}"
+            text_tokens = _tokenize(text)
+            overlap = len(query_tokens & text_tokens)
+            if overlap == 0:
+                continue
+            score = round(overlap / len(query_tokens), 3)
+            keyword_hits.append(SearchHit(
+                entry_id=entry["entry_id"],
+                job_id=entry["job_id"],
+                task=entry["task"],
+                output_summary=entry.get("output_summary"),
+                saved_at=entry["saved_at"],
+                score=score,
+            ))
+        keyword_hits.sort(key=lambda h: h.score, reverse=True)
 
-        score = round(overlap / len(query_tokens), 3)
-        hits.append(SearchHit(
+    # 直近エントリを SearchHit に変換（スコア 0 = recent）
+    seen_ids: set[str] = {h.entry_id for h in keyword_hits[:top_k]}
+    recent_hits: list[SearchHit] = []
+    for entry in recent_entries:
+        if entry["entry_id"] in seen_ids:
+            continue
+        recent_hits.append(SearchHit(
             entry_id=entry["entry_id"],
             job_id=entry["job_id"],
             task=entry["task"],
             output_summary=entry.get("output_summary"),
             saved_at=entry["saved_at"],
-            score=score,
+            score=0.0,
         ))
 
-    hits.sort(key=lambda h: h.score, reverse=True)
-    return SearchResult(query=query, hits=hits[:top_k], total_searched=total_searched)
+    combined = keyword_hits[:top_k] + recent_hits
+    return SearchResult(query=query, hits=combined, total_searched=total_searched)
 
 
 def _tokenize(text: str) -> set[str]:

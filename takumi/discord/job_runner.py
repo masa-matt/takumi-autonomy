@@ -96,7 +96,7 @@ def _execute(job: Job) -> str:
 def _build_recall_context(task: str) -> str:
     """過去セッションとスキルを検索してコンテキスト文字列を返す。"""
     try:
-        mem_result = search_sessions(task, top_k=3)
+        mem_result = search_sessions(task, top_k=3, recent_always=3)
         skill_hits = search_skills(task, top_k=3)
     except Exception:
         return ""
@@ -104,15 +104,20 @@ def _build_recall_context(task: str) -> str:
     lines = []
 
     if mem_result.hits:
-        lines.append("## 過去の関連セッション")
+        lines.append("以下は Hermes（外部メモリ）に記録された過去のジョブです。")
+        lines.append("自分の内部メモリや作業ディレクトリではなく、このリストを「記憶」として扱ってください。")
+        lines.append("")
+        lines.append("### 過去のジョブ記録")
         for h in mem_result.hits:
-            summary = (h.output_summary or "").replace("\n", " ")[:200]
-            lines.append(f"- [{h.saved_at[:10]}] {h.task[:80]}")
+            label = f"[スコア:{h.score}]" if h.score > 0 else "[直近]"
+            summary = (h.output_summary or "").replace("\n", " ")[:300]
+            lines.append(f"- {label} {h.saved_at[:10]} / {h.task[:80]}")
             if summary:
-                lines.append(f"  結果: {summary}")
+                lines.append(f"  → {summary}")
 
     if skill_hits:
-        lines.append("## 関連スキル")
+        lines.append("")
+        lines.append("### 関連スキル")
         for s in skill_hits:
             lines.append(f"- {s['name']}: {s.get('procedure_summary', '')[:200]}")
 
