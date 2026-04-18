@@ -29,6 +29,7 @@ from takumi.discord.job_runner import run_job, resume_job
 from takumi.sandbox.ingress import (
     list_inbox, copy_from_inbox, copy_to_outbox, INBOX_DIR, OUTBOX_DIR
 )
+from takumi.sandbox.workspace import get_workspace, Workspace, JOBS_DIR
 
 # ── ロギング ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -183,15 +184,6 @@ async def _run_job(
                 lambda: resume_job(job, approved=approved, on_status=on_status),
             )
 
-    # 完了したら output/ を outbox/ にコピー
-    if job.status == JobStatus.DONE:
-        from takumi.sandbox.workspace import get_workspace
-        ws = get_workspace(job.job_id)
-        if ws:
-            copied = copy_to_outbox(ws, job.job_id)
-            if copied:
-                log.info("Job %s: %d file(s) copied to outbox", job.job_id, len(copied))
-
     log.info("Job %s finished: status=%s", job.job_id, job.status.value)
 
 
@@ -223,7 +215,7 @@ def _handle_files_list() -> str:
 
     outbox_files: list[str] = []
     if OUTBOX_DIR.exists():
-        for job_dir in sorted(OUTBOX_DIR.iterdir()):
+        for job_dir in sorted(OUTBOX_DIR.iterdir(), reverse=True):
             if job_dir.is_dir():
                 for f in sorted(job_dir.iterdir()):
                     if f.is_file():
@@ -233,8 +225,47 @@ def _handle_files_list() -> str:
     return (
         f"📥 **inbox** ({len(inbox)} files)\n{inbox_text}\n\n"
         f"📤 **outbox**\n{outbox_text}\n\n"
-        f"inbox のファイルは次の `/task` 実行時に自動で渡されます。"
+        f"inbox のファイルは次の `/task` 実行時に自動で渡されます。\n"
+        f"成果物を取り出すには `/fetch <job_id>` を使ってください。"
     )
+
+
+def _handle_fetch(job_id: str) -> str:
+    """job の output/ を outbox に取り出す。result.md は除外。"""
+    ws = get_workspace(job_id)
+    if ws is None:
+        # job_id が job- で始まらない場合など部分一致で探す
+        if JOBS_DIR.exists():
+            matches = [d for d in JOBS_DIR.iterdir() if d.is_dir() and job_id in d.name]
+            if len(matches) == 1:
+                ws = Workspace(matches[0])
+            elif len(matches) > 1:
+                names = ", ".join(d.name for d in matches[:5])
+                return f"❓ 複数の job が見つかりました: {names}\nフルの job_id を指定してください。"
+        if ws is None:
+            return f"❓ job が見つかりません: `{job_id}`"
+
+    if not ws.output.exists():
+        return f"📭 `{job_id}` の output/ は空です。"
+
+    # result.md（作業サマリー）は除外して成果物のみコピー
+    deliverables = [
+        f for f in ws.output.iterdir()
+        if f.is_file() and f.name != "result.md"
+    ]
+
+    if not deliverables:
+        return f"📭 `{job_id}` に成果物ファイルがありません（result.md のみ）。"
+
+    copied = copy_to_outbox(ws, job_id)
+    # result.md を outbox から除去
+    outbox_job_dir = OUTBOX_DIR / job_id
+    result_md = outbox_job_dir / "result.md"
+    if result_md.exists():
+        result_md.unlink()
+
+    names = "\n".join(f"  • `{f.name}`" for f in deliverables)
+    return f"📤 **{job_id}** の成果物を outbox に取り出しました:\n{names}"
 
 
 # ── Claude Code 認証フロー ──────────────────────────────────────────────────────
@@ -387,6 +418,12 @@ async def slash_ping(interaction: discord.Interaction):
 @bot.tree.command(name="files", description="inbox / outbox の一覧を表示")
 async def slash_files(interaction: discord.Interaction):
     await interaction.response.send_message(_handle_files_list())
+
+
+@bot.tree.command(name="fetch", description="job の成果物を outbox に取り出す")
+@app_commands.describe(job_id="取り出す job の ID（例: job-20260418-xxxxxxxx）")
+async def slash_fetch(interaction: discord.Interaction, job_id: str):
+    await interaction.response.send_message(_handle_fetch(job_id))
 
 
 # ── エントリポイント ───────────────────────────────────────────────────────────
