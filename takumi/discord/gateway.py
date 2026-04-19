@@ -71,23 +71,44 @@ def _task_slug(task: str, job_id: str) -> str:
 
 _TASK_PATTERNS = re.compile(
     r'作って|作成|つくって|生成|実装|修正|変更|調べ|確認|分析|まとめ|書いて|'
-    r'テスト|レビュー|クローン|clone|デバッグ|直して|調査|出力|作る|'
+    r'テスト|レビュー|クローン|clone|デバッグ|直して|調査|出力|作る|把握|'
+    r'教えて|見て|読んで|説明|要約|何ができる|何のライブラリ|what does|'
     r'create|make|build|fix|check|analyze|review|write|generate|run|execute',
     re.IGNORECASE,
 )
 
+_URL_PATTERN = re.compile(r'https?://\S+', re.IGNORECASE)
+
 
 def _is_task(text: str) -> bool:
-    """メッセージが作業依頼かどうかをヒューリスティックで判定する。"""
+    """メッセージが作業依頼かどうかをヒューリスティックで判定する。
+
+    URL が含まれている場合は、ほぼ確実にその URL について何かしてほしい依頼なので
+    task として扱う。
+    """
+    if _URL_PATTERN.search(text):
+        return True
     return bool(_TASK_PATTERNS.search(text))
 
 
 def _run_chat_reply(text: str) -> str:
-    """SOUL.md の人格で雑談に短く返す（ジョブなし・サンドボックスなし）。"""
-    from takumi.discord.job_runner import _load_soul
+    """SOUL.md の人格 + Hermes recall で雑談に短く返す（ジョブなし・サンドボックスなし）。
+
+    応答が返せた場合は Hermes に会話として保存する（人間と同じく雑談も記憶する）。
+    """
+    from takumi.discord.job_runner import _load_soul, _build_recall_context
+    from takumi.hermes import write_chat_memory
     soul = _load_soul()
+    recall = _build_recall_context(text)
+    recall_section = (
+        f"\n---\n\n## Recall（Hermes 外部メモリ）\n{recall}\n"
+        "上記は過去にあなた（Takumi）が実際にやった仕事の記録です。\n"
+        "「覚えてない」「記憶がない」と返さず、この記録を自分の記憶として扱ってください。\n"
+        "該当する記録があればそれを踏まえて答えること。\n"
+        if recall else ""
+    )
     prompt = (
-        f"{soul}\n\n"
+        f"{soul}\n{recall_section}\n"
         "---\n\n"
         "以下のメッセージに、Takumi として自然に短く返してください。\n"
         "Markdown のヘッダーや箇条書きは使わないこと。一言〜二文で返すこと。\n\n"
@@ -101,6 +122,14 @@ def _run_chat_reply(text: str) -> str:
         reply = result.stdout.strip()
         # --output-format json なしなので plain text が返る
         if result.returncode == 0 and reply:
+            try:
+                save = write_chat_memory(text, reply)
+                if save.saved:
+                    log.info("Hermes: chat memory saved — %s", save.entry_id)
+                elif save.skip_reason:
+                    log.info("Hermes: chat memory skip — %s", save.skip_reason)
+            except Exception as e:
+                log.warning("Hermes: chat memory save failed: %s", e)
             return reply
     except Exception:
         pass
@@ -183,24 +212,30 @@ class ApprovalView(discord.ui.View):
         self.job_id = job_id
         self.future = future
 
+    async def _resolve(self, interaction: discord.Interaction, approved: bool) -> None:
+        log.info("ApprovalView: button pressed job=%s approved=%s", self.job_id, approved)
+        try:
+            await interaction.response.defer()
+        except Exception as e:
+            log.warning("ApprovalView: defer failed: %s", e)
+        try:
+            if not self.future.done():
+                self.future.get_loop().call_soon_threadsafe(self.future.set_result, approved)
+        except Exception as e:
+            log.exception("ApprovalView: set_result failed: %s", e)
+        self.stop()
+
     @discord.ui.button(label="✅ 承認して実行", style=discord.ButtonStyle.green)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.future.done():
-            self.future.get_event_loop().call_soon_threadsafe(self.future.set_result, True)
-        self.stop()
-        await interaction.response.defer()
+        await self._resolve(interaction, True)
 
     @discord.ui.button(label="❌ 却下", style=discord.ButtonStyle.red)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.future.done():
-            self.future.get_event_loop().call_soon_threadsafe(self.future.set_result, False)
-        self.stop()
-        await interaction.response.defer()
+        await self._resolve(interaction, False)
 
     async def on_timeout(self):
         if not self.future.done():
-            loop = asyncio.get_event_loop()
-            loop.call_soon_threadsafe(self.future.set_result, False)
+            self.future.get_loop().call_soon_threadsafe(self.future.set_result, False)
 
 
 # ── コアタスク処理 ─────────────────────────────────────────────────────────────
@@ -217,41 +252,36 @@ async def _run_job(
     loop = asyncio.get_event_loop()
     slug_holder: list[str] = []  # job 確定後に slug を格納
 
-    def on_status(job: Job) -> None:
-        if not slug_holder:
-            slug_holder.append(_task_slug(job.task, job.job_id))
-        slug = slug_holder[0]
-
+    async def _apply_status(job: Job, slug: str) -> None:
+        """main loop 側で future / view 作成 + status_msg 編集を完結させる。"""
         if chat_mode:
             text = _build_chat_text(job)
             if job.status == JobStatus.BLOCKED:
                 future = loop.create_future()
                 _pending_approvals[job.job_id] = future
                 view = ApprovalView(job.job_id, future)
-                asyncio.run_coroutine_threadsafe(
-                    status_msg.edit(content=text, view=view),
-                    loop,
-                ).result(timeout=10)
+                await status_msg.edit(content=text, view=view)
+                log.info("ApprovalView: attached job=%s msg=%s (chat)", job.job_id, status_msg.id)
             else:
-                asyncio.run_coroutine_threadsafe(
-                    status_msg.edit(content=text, view=None),
-                    loop,
-                ).result(timeout=10)
+                await status_msg.edit(content=text, view=None)
         else:
             embed = _build_embed(job, slug)
             if job.status == JobStatus.BLOCKED:
                 future = loop.create_future()
                 _pending_approvals[job.job_id] = future
                 view = ApprovalView(job.job_id, future)
-                asyncio.run_coroutine_threadsafe(
-                    status_msg.edit(content=None, embed=embed, view=view),
-                    loop,
-                ).result(timeout=10)
+                await status_msg.edit(content=None, embed=embed, view=view)
+                log.info("ApprovalView: attached job=%s msg=%s (embed)", job.job_id, status_msg.id)
             else:
-                asyncio.run_coroutine_threadsafe(
-                    status_msg.edit(content=None, embed=embed, view=None),
-                    loop,
-                ).result(timeout=10)
+                await status_msg.edit(content=None, embed=embed, view=None)
+
+    def on_status(job: Job) -> None:
+        if not slug_holder:
+            slug_holder.append(_task_slug(job.task, job.job_id))
+        slug = slug_holder[0]
+        asyncio.run_coroutine_threadsafe(
+            _apply_status(job, slug), loop,
+        ).result(timeout=10)
 
     inbox_files = [f.name for f in list_inbox()]
 
@@ -444,9 +474,23 @@ async def on_ready():
 
 
 @bot.event
+async def on_interaction(interaction: discord.Interaction):
+    log.info("on_interaction: type=%s data=%s msg_id=%s user=%s",
+             interaction.type,
+             getattr(interaction, "data", None),
+             getattr(interaction.message, "id", None) if interaction.message else None,
+             interaction.user.name if interaction.user else None)
+
+
+@bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+    log.info("on_message: ch=%s thread=%s author=%s text=%r",
+             message.channel.id,
+             isinstance(message.channel, discord.Thread),
+             message.author.name,
+             message.content[:80])
 
     # スレッド内のメッセージ
     if isinstance(message.channel, discord.Thread):

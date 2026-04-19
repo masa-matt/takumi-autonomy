@@ -67,6 +67,42 @@ def write_memory(job, output: Optional[str], danger_level: str = "auto_allow") -
     return SaveResult(saved=True, entry_id=entry_id)
 
 
+def write_chat_memory(user_text: str, reply: str) -> SaveResult:
+    """雑談（ジョブを伴わない会話）も記憶として保存する。
+
+    Job を持たない代わりに job_id は `chat-YYYYMMDD-xxxxxxxx`、tags に "chat" を入れる。
+    output_summary は「user: ... / takumi: ...」形式で両方残す。
+    """
+    _ENTRIES_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not reply:
+        return SaveResult(saved=False, skip_reason="empty reply")
+
+    combined = f"user: {user_text}\ntakumi: {reply}"
+    for pattern in _SENSITIVE_PATTERNS:
+        if re.search(pattern, combined, re.IGNORECASE):
+            return SaveResult(saved=False, skip_reason=f"chat matches sensitive pattern: {pattern!r}")
+
+    today = datetime.now(timezone.utc).strftime('%Y%m%d')
+    suffix = uuid.uuid4().hex[:8]
+    entry_id = f"mem-{today}-{suffix}"
+    chat_job_id = f"chat-{today}-{suffix}"
+
+    entry = MemoryEntry(
+        entry_id=entry_id,
+        job_id=chat_job_id,
+        task=user_text[:200],
+        status="chat",
+        output_summary=combined[:500],
+        danger_level="auto_allow",
+        tags=["chat"],
+    )
+
+    path = _ENTRIES_DIR / f"{entry_id}.json"
+    path.write_text(json.dumps(entry.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    return SaveResult(saved=True, entry_id=entry_id)
+
+
 # ── Search ────────────────────────────────────────────────────────────────────
 
 def search_sessions(query: str, top_k: int = 3, recent_always: int = 3) -> SearchResult:

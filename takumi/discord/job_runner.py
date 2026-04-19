@@ -11,6 +11,7 @@ Executor の選択（TAKUMI_EXECUTOR 環境変数）:
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -78,6 +79,37 @@ def _execute(job: Job) -> str:
     return executor_adapter.execute(job, workspace)
 
 
+_JST = timezone(timedelta(hours=9))
+
+
+def _relative_time_label(saved_at: str, now: datetime) -> str:
+    """saved_at (ISO) から「N分前 / 今日の HH:MM / 昨日の HH:MM / N日前」のラベルを返す。"""
+    try:
+        saved = datetime.fromisoformat(saved_at.replace("Z", "+00:00"))
+    except Exception:
+        return saved_at[:16]
+    saved_local = saved.astimezone(now.tzinfo)
+    delta = now - saved_local
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 1:
+        return "たった今"
+    if minutes < 60:
+        return f"{minutes}分前"
+    today = now.date()
+    saved_date = saved_local.date()
+    day_diff = (today - saved_date).days
+    hhmm = saved_local.strftime("%H:%M")
+    if day_diff == 0:
+        return f"今日 {hhmm}"
+    if day_diff == 1:
+        return f"昨日 {hhmm}"
+    if day_diff == 2:
+        return f"一昨日 {hhmm}"
+    if day_diff < 7:
+        return f"{day_diff}日前 {hhmm}"
+    return saved_local.strftime("%Y-%m-%d %H:%M")
+
+
 def _build_recall_context(task: str) -> str:
     """過去セッションとスキルを検索してコンテキスト文字列を返す。"""
     try:
@@ -86,17 +118,23 @@ def _build_recall_context(task: str) -> str:
     except Exception:
         return ""
 
+    now = datetime.now(_JST)
+    today_str = now.strftime("%Y-%m-%d %H:%M JST")
+
     lines = []
 
     if mem_result.hits:
+        lines.append(f"現在日時: {today_str}")
         lines.append("以下は Hermes（外部メモリ）に記録された過去のジョブです。")
         lines.append("自分の内部メモリや作業ディレクトリではなく、このリストを「記憶」として扱ってください。")
+        lines.append("各エントリの when= は Python 側で計算済みの相対時刻です。そのまま使うこと（別途再計算しない）。")
         lines.append("")
         lines.append("### 過去のジョブ記録")
         for h in mem_result.hits:
             label = f"[スコア:{h.score}]" if h.score > 0 else "[直近]"
             summary = (h.output_summary or "").replace("\n", " ")[:300]
-            lines.append(f"- {label} {h.saved_at[:10]} / {h.task[:80]}")
+            when = _relative_time_label(h.saved_at, now)
+            lines.append(f"- {label} when={when} / {h.task[:80]}")
             if summary:
                 lines.append(f"  → {summary}")
 
